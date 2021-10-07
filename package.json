@@ -1,0 +1,48 @@
+{
+  "name": "contracts",
+  "version": "1.0.0",
+  "description": "",
+  "main": "truffle-config.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "build": "truffle compile",
+    "develop": "npm run truffle:deploy --network=development",
+    "deploy": "npm run lint && npm run truffle:deploy --network=development",
+    "deploy-rinkeby": "npm run truffle:deploy --network=rinkeby",
+    "deploy-mainnet": "npm run truffle:deploy --network=mainnet",
+    "deploy-kovan": "npm run truffle:deploy --network=kovan",
+    "truffle:deploy": "truffle migrate --reset --compile-all --network $npm_config_network",
+    "deploy-reset": "truffle migrate --reset --compile-all",
+    "lint": "solhint contracts/*.sol --formatter stylish",
+    "lint:fix": "solhint contracts/*.sol --formatter stylish --fix",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "generate-docs": "solidity-docgen -t . --solc-module solc-0.7"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Aristokrates/uniswap-limit-trade.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Aristokrates/uniswap-limit-trade/issues"
+  },
+  "homepage": "https://github.com/Aristokrates/uniswap-limit-trade#readme",
+  "dependencies": {
+    "@openzeppelin/contracts": "^3.4.2",
+    "@truffle/hdwallet-provider": "^1.4.2",
+    "@uniswap/v3-periphery": "^1.1.1",
+    "dotenv": "^10.0.0",
+    "jsbi": "^3.2.5",
+    "logops": "^2.1.1",
+    "solhint": "^3.3.6",
+    "truffle": "^5.4.3"
+  },
+  "devDependencies": {
+    "solc-0.7": "npm:solc@^0.7.0",
+    "solidity-docgen": "^0.5.14",
+    "truffle-plugin-verify": "^0.5.15"
+  }
+}

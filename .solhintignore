@@ -1,0 +1,9 @@
+node_modules/
+.idea/
+.openzeppelin
+.vscode
+cache/
+client/
+docker/
+scripts/
+
