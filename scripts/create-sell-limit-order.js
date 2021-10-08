@@ -1,5 +1,5 @@
 const LimitTradeManager = artifacts.require("LimitTradeManager");
-const IERC20 = artifacts.require("IERC20");
+const ERC20 = artifacts.require("ERC20");
 
 const JSBI = require('jsbi');
 
@@ -17,22 +17,39 @@ module.exports = async(callback) => {
         var BN = web3.utils.BN;
 
         // mainet addresses
-        const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
-        const token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
+        // const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
+        // const token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
 
-        const amount0 = web3.utils.toWei("0.1").toString();
+        // kovan addresses
+        const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; // UNI
+        const token1 = "0x4f96fe3b7a6cf9725f59d353f723c1bdb64ca6aa"; // DAI
+
+        const token0Instance = await ERC20.at(token0);
+        const token1Instance = await ERC20.at(token1);
+
+        const token0Decimals = await token0Instance.decimals();
+        const token1Decimals = await token1Instance.decimals();
+
+        const amount0 = web3.utils.toWei("0.001").toString();
         const amount1 = 0;
-        const fee = 3000;
 
-        // target price: 1 UNI = 26.5104 DAI --> sell UNI for DAI
+        // //mainnet
+        // const fee = 3000;
+
+        //kovan
+        const fee = 500;
+
+        // // target price: 1 UNI = 26.5104 DAI --> sell UNI for DAI MAINNET
+        // let targetSqrtPriceX96 = encodeSqrtRatioX96(
+        //     JSBI.BigInt(265104),
+        //     JSBI.BigInt(10000));
+
+        // target price: 1 UNI = 110.58 DAI --> sell UNI for DAI KOVAN
         let targetSqrtPriceX96 = encodeSqrtRatioX96(
-            JSBI.BigInt(265104),
-            JSBI.BigInt(10000));
+            JSBI.BigInt(11058),
+            JSBI.BigInt(100));
 
         const tradeInstance = await LimitTradeManager.deployed();
-
-        const token0Instance = await IERC20.at(token0);
-        const token1Instance = await IERC20.at(token1);
 
         if (amount0 > 0) {
             await token0Instance.approve(
@@ -49,6 +66,13 @@ module.exports = async(callback) => {
                 {from: currentAccount}
             );
         }
+
+        console.log("Token0 --> " + token0.toString());
+        console.log("Token1 --> " + token1.toString());
+        console.log("Amount0 --> " + amount0.toString());
+        console.log("Amount1 --> " + amount1.toString());
+        console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString(16));
+        console.log("Fee --> " + fee.toString());
 
         const receipt = await tradeInstance.createLimitTrade(
             token0,

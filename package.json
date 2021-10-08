@@ -31,6 +31,7 @@
   },
   "homepage": "https://github.com/Aristokrates/uniswap-limit-trade#readme",
   "dependencies": {
+    "@chainlink/contracts": "^0.2.2",
     "@openzeppelin/contracts": "^3.4.2",
     "@truffle/hdwallet-provider": "^1.4.2",
     "@uniswap/v3-periphery": "^1.1.1",

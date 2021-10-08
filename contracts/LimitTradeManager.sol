@@ -6,9 +6,10 @@ pragma abicoder v2;
 import "@openzeppelin/contracts/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import '@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol';
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/cryptography/ECDSA.sol";
 
 import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
@@ -24,10 +25,12 @@ import "@uniswap/v3-periphery/contracts/libraries/PositionKey.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/IQuoterV2.sol";
 
-/// @title  LimitTradeManager
-contract LimitTradeManager is Ownable {
+import "./interfaces/ILimitSignalKeeper.sol";
+import "./interfaces/ILimitTradeManager.sol";
 
-    using SafeERC20 for IERC20;
+/// @title  LimitTradeManager
+contract LimitTradeManager is ILimitTradeManager, Ownable {
+
     using SafeMath for uint256;
 
     struct Deposit {
@@ -77,6 +80,12 @@ contract LimitTradeManager is Ownable {
     /// @dev margin for the limit trades
     int24 public limitMargin;
 
+    /// @dev only keeper
+    modifier onlyKeeper() {
+        require(msg.sender == keeper, "NOT_KEEPER");
+        _;
+    }
+
     constructor(address _controller, address _keeper, int24 _limitMargin,
             INonfungiblePositionManager _nonfungiblePositionManager,
             IUniswapV3Factory _factory,
@@ -100,7 +109,7 @@ contract LimitTradeManager is Ownable {
         (int24 _lowerTick, int24 _upperTick) = calculateLimitTicks(
             _poolAddress, _amount0, _amount1, _targetSqrtPriceX96
         );
-        (_tokenId,,,) = _mintNewPosition(
+        (_tokenId,,_amount0,_amount1) = _mintNewPosition(
             _token0, _token1, _amount0, _amount1, _lowerTick, _upperTick, _fee
         );
 
@@ -123,13 +132,14 @@ contract LimitTradeManager is Ownable {
         depositIdsPerAddress[msg.sender].push(_depositId);
         depositIdPerToken[_tokenId] = _depositId;
 
-        // TODO signal keeper
-        //ILimitSignalKeeper(keeper).newLimitTradeToMonitor(_depositId, _tokenId);
+        // TODO enable this when ready
+        //ILimitSignalKeeper(keeper).startMonitor(_tokenId, _amount0, _amount1);
 
         emit DepositCreated(msg.sender, _depositId, _tokenId);
     }
 
-    function closeLimitTrade(uint256 _tokenId) external returns (uint256 _amount0, uint256 _amount1) {
+    function closeLimitTrade(uint256 _tokenId) external override onlyKeeper
+        returns (uint256 _amount0, uint256 _amount1) {
 
         uint256 _depositId = depositIdPerToken[_tokenId];
         require(_depositId != 0, "NOT_EXIST");
@@ -187,6 +197,10 @@ contract LimitTradeManager is Ownable {
         emit DepositClaimed(msg.sender, _depositId, deposit.tokensOwed0, deposit.tokensOwed1);
     }
 
+    function changeKeeper(address _newKeeper) external onlyOwner {
+        keeper = _newKeeper;
+    }
+
     function depositIdsPerAddressLength(address user) external view returns (uint256) {
         return depositIdsPerAddress[user].length;
     }
@@ -233,11 +247,11 @@ contract LimitTradeManager is Ownable {
         }
     }
 
-//    function _checkSignature(uint256 nonce, bytes memory signature) internal view {
-//        bytes32 hash = keccak256(abi.encodePacked(msg.value, controller, nonce));
-//        // Verify that the message's signer is the controller);
-//        require(ECDSA.recover(hash, signature) == controller, "ERR_NO_AUTH");
-//    }
+    function _checkSignature(uint256 nonce, bytes memory signature) internal view {
+        bytes32 hash = keccak256(abi.encodePacked(msg.value, controller, nonce));
+        // Verify that the message's signer is the controller);
+        require(ECDSA.recover(hash, signature) == controller, "ERR_NO_AUTH");
+    }
 
     /// @dev Wrapper around `LiquidityAmounts.getLiquidityForAmounts()`.
     function _liquidityForAmounts(

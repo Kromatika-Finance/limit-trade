@@ -57,6 +57,8 @@ module.exports = async(callback) => {
             const decodedPrice = decodeSqrtRatioX96(
                 JSBI.BigInt(poolInfo.sqrtPriceX96.toString())
             );
+
+            console.log(JSON.stringify(poolInfo));
             console.log("Pool CurrentPrice: " + decodedPrice.toString());
 
         }
