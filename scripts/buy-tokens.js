@@ -6,7 +6,7 @@ module.exports = async(callback) => {
     const token0 = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"; //WETH
     const token1 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
 
-    const amount0 = web3.utils.toWei("0.02").toString();
+    const amount0 = web3.utils.toWei("50").toString();
 
     const fee = "3000";
     const routerAddress = "0xE592427A0AEce92De3Edee1F18E0157C05861564";

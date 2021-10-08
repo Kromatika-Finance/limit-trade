@@ -32,31 +32,49 @@ contract LimitTradeManager is Ownable {
 
     struct Deposit {
         uint256 tokenId;
-        uint256 block;
+        uint256 opened;
+        address token0;
+        address token1;
+        uint256 tokensOwed0;
+        uint256 tokensOwed1;
+        uint256 closed;
+        address owner;
     }
 
-    /// @dev depositIndex[address] => array of ids
-    mapping(address => uint256[]) public depositIndex;
+    event DepositCreated(address indexed owner, uint256 indexed depositId, uint256 indexed tokenId);
 
-    /// @dev deposits per id/count
+    event DepositClosed(address indexed owner, uint256 indexed depositId, uint256 indexed tokenId);
+
+    event DepositClaimed(address indexed owner, uint256 indexed depositId, uint256 tokensOwed0, uint256 tokensOwed1);
+
+    /// @dev depositIdsPerAddress[address] => array of deposit ids
+    mapping(address => uint256[]) public depositIdsPerAddress;
+
+    /// @dev deposits per id
     mapping (uint256 => Deposit) public deposits;
 
-    /// @dev owner per tokenId
-    mapping (uint256 => address) public tokenOwner;
+    /// @dev id per tokenId
+    mapping (uint256 => uint256) public depositIdPerToken;
 
     /// @dev deposit count
     uint256 public depositCount;
 
+    /// @dev controller contract
     address public controller;
 
+    /// @dev keeper contract
     address public keeper;
 
+    /// @dev uniV3 position manager
     INonfungiblePositionManager public immutable nonfungiblePositionManager;
 
+    /// @dev wrapper ETH
     IWETH9 public WETH;
 
+    /// @dev univ3 factory
     IUniswapV3Factory factory;
 
+    /// @dev margin for the limit trades
     int24 public limitMargin;
 
     constructor(address _controller, address _keeper, int24 _limitMargin,
@@ -74,95 +92,108 @@ contract LimitTradeManager is Ownable {
     }
 
     function createLimitTrade(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
-        uint160 _targetSqrtPriceX96 , uint24 _fee) external {
+        uint160 _targetSqrtPriceX96 , uint24 _fee) external returns (uint256 _depositId, uint256 _tokenId) {
 
         address _poolAddress = factory.getPool(_token0, _token1, _fee);
         require (_poolAddress != address(0), "POOL_NOT_FOUND");
 
-        (int24 _lowerTick, int24 _upperTick) = calculateLimitTicks(_poolAddress, _amount0, _amount1, _targetSqrtPriceX96);
-        (uint256 _tokenId,,,) = _mintNewPosition(_token0, _token1, _amount0, _amount1,
-            _lowerTick, _upperTick, _fee);
-
-        // TODO signal keeper
-        //ILimitSignalKeeper(keeper).onNewPosition(_tokenId);
-    }
-
-    function _mintNewPosition(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
-    int24 _lowerTick, int24 _upperTick,
-        uint24 _fee)
-    internal
-    returns (
-        uint256 tokenId,
-        uint128 liquidity,
-        uint256 amount0,
-        uint256 amount1
-    ) {
-
-        if (_amount0 > 0) {
-            // transfer tokens to contract
-            TransferHelper.safeTransferFrom(_token0, msg.sender, address(this), _amount0);
-
-            // Approve the position manager
-            TransferHelper.safeApprove(_token0, address(nonfungiblePositionManager), _amount0);
-        }
-
-        if (_amount1 > 0) {
-            // transfer tokens to contract
-            TransferHelper.safeTransferFrom(_token1, msg.sender, address(this), _amount1);
-
-            // Approve the position manager
-            TransferHelper.safeApprove(_token1, address(nonfungiblePositionManager), _amount1);
-        }
-
-        INonfungiblePositionManager.MintParams memory params =
-        INonfungiblePositionManager.MintParams({
-            token0: _token0,
-            token1: _token1,
-            fee: _fee,
-            tickLower: _lowerTick,
-            tickUpper: _upperTick,
-            amount0Desired: _amount0,
-            amount1Desired: _amount1,
-            amount0Min: 0,
-            amount1Min: 0,
-            recipient: address(this),
-            deadline: block.timestamp
-        });
-
-        (tokenId, liquidity, amount0, amount1) = nonfungiblePositionManager.mint(params);
+        (int24 _lowerTick, int24 _upperTick) = calculateLimitTicks(
+            _poolAddress, _amount0, _amount1, _targetSqrtPriceX96
+        );
+        (_tokenId,,,) = _mintNewPosition(
+            _token0, _token1, _amount0, _amount1, _lowerTick, _upperTick, _fee
+        );
 
         // Create a deposit
         depositCount++;
+        _depositId = depositCount;
+
         Deposit memory newDeposit = Deposit({
-            tokenId: tokenId,
-            block: block.number
+            tokenId: _tokenId,
+            opened: block.number,
+            token0: _token0,
+            token1: _token1,
+            tokensOwed0: 0,
+            tokensOwed1: 0,
+            closed: 0,
+            owner: msg.sender
         });
 
-        deposits[depositCount] = newDeposit;
-        depositIndex[msg.sender].push(depositCount);
-        tokenOwner[tokenId] = msg.sender;
+        deposits[_depositId] = newDeposit;
+        depositIdsPerAddress[msg.sender].push(_depositId);
+        depositIdPerToken[_tokenId] = _depositId;
 
-        // Remove allowance and refund in both assets.
-        if (amount0 < _amount0) {
-            TransferHelper.safeApprove(_token0, address(nonfungiblePositionManager), 0);
-            uint256 _refund0 = _amount0 - amount0;
-            TransferHelper.safeTransfer(_token0, msg.sender, _refund0);
-        }
+        // TODO signal keeper
+        //ILimitSignalKeeper(keeper).newLimitTradeToMonitor(_depositId, _tokenId);
 
-        if (amount1 < _amount1) {
-            TransferHelper.safeApprove(_token1, address(nonfungiblePositionManager), 0);
-            uint256 _refund1 = _amount1 - amount1;
-            TransferHelper.safeTransfer(_token1, msg.sender, _refund1);
-        }
+        emit DepositCreated(msg.sender, _depositId, _tokenId);
     }
 
-    function depositIndexLength(address user) external view returns (uint256) {
-        return depositIndex[user].length;
+    function closeLimitTrade(uint256 _tokenId) external returns (uint256 _amount0, uint256 _amount1) {
+
+        uint256 _depositId = depositIdPerToken[_tokenId];
+        require(_depositId != 0, "NOT_EXIST");
+        Deposit storage deposit = deposits[_depositId];
+        require(deposit.closed == 0, "DEPOSIT_CLOSED");
+
+        uint256 tokensOwed0;
+        uint256 tokensOwed1;
+
+        (,,,,,,,uint128 liquidity,,,,) = nonfungiblePositionManager.positions(_tokenId);
+
+        if (liquidity > 0) {
+            (tokensOwed0, tokensOwed1) = _removeLiquidity(_tokenId, liquidity);
+        }
+
+        if (tokensOwed0 > 0 || tokensOwed1 > 0) {
+            (tokensOwed0, tokensOwed1) = _collectTokensOwed(_tokenId);
+            _amount0 += tokensOwed0;
+            _amount1 += tokensOwed1;
+        }
+
+        // update the state
+        deposit.closed = block.number;
+        deposit.tokensOwed0 = _amount0;
+        deposit.tokensOwed1 = _amount1;
+
+        // close the position
+        nonfungiblePositionManager.burn(_tokenId);
+
+        emit DepositClosed(deposit.owner, _depositId, _tokenId);
+    }
+
+    function claimLimitTrade(uint256 _depositId, uint256 _nonce, bytes memory _signature) external {
+
+        // TODO add signature check
+        //_checkSignature(_nonce, _signature);
+
+        Deposit storage deposit = deposits[_depositId];
+        require(deposit.closed > 0, "DEPOSIT_NOT_CLOSED");
+        require(deposit.owner == msg.sender, "ONLY_OWNER");
+
+        uint256 _tokensToSend = deposit.tokensOwed0;
+
+        if (_tokensToSend > 0) {
+            deposit.tokensOwed0 = 0;
+            TransferHelper.safeTransfer(deposit.token0, deposit.owner, _tokensToSend);
+        }
+
+        _tokensToSend = deposit.tokensOwed1;
+        if (_tokensToSend > 0) {
+            deposit.tokensOwed1 = 0;
+            TransferHelper.safeTransfer(deposit.token1, deposit.owner, _tokensToSend);
+        }
+
+        emit DepositClaimed(msg.sender, _depositId, deposit.tokensOwed0, deposit.tokensOwed1);
+    }
+
+    function depositIdsPerAddressLength(address user) external view returns (uint256) {
+        return depositIdsPerAddress[user].length;
     }
 
     function calculateLimitTicks(address _poolAddress, uint256 _amount0, uint256 _amount1,
         uint160 _targetSqrtPriceX96) public view
-        returns (int24 _lowerTick, int24 _upperTick) {
+    returns (int24 _lowerTick, int24 _upperTick) {
 
         IUniswapV3Pool _pool = IUniswapV3Pool(_poolAddress);
         int24 tickSpacing = _pool.tickSpacing();
@@ -201,6 +232,12 @@ contract LimitTradeManager is Ownable {
             (_lowerTick, _upperTick) = (_askLower, _askUpper);
         }
     }
+
+//    function _checkSignature(uint256 nonce, bytes memory signature) internal view {
+//        bytes32 hash = keccak256(abi.encodePacked(msg.value, controller, nonce));
+//        // Verify that the message's signer is the controller);
+//        require(ECDSA.recover(hash, signature) == controller, "ERR_NO_AUTH");
+//    }
 
     /// @dev Wrapper around `LiquidityAmounts.getLiquidityForAmounts()`.
     function _liquidityForAmounts(
@@ -241,5 +278,100 @@ contract LimitTradeManager is Ownable {
     function _toUint128(uint256 x) internal pure returns (uint128) {
         assert(x <= type(uint128).max);
         return uint128(x);
+    }
+
+    function _mintNewPosition(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
+        int24 _lowerTick, int24 _upperTick,
+        uint24 _fee)
+    private
+    returns (
+        uint256 tokenId,
+        uint128 liquidity,
+        uint256 amount0,
+        uint256 amount1
+    ) {
+
+        if (_amount0 > 0) {
+            // transfer tokens to contract
+            TransferHelper.safeTransferFrom(_token0, msg.sender, address(this), _amount0);
+
+            // Approve the position manager
+            TransferHelper.safeApprove(_token0, address(nonfungiblePositionManager), _amount0);
+        }
+
+        if (_amount1 > 0) {
+            // transfer tokens to contract
+            TransferHelper.safeTransferFrom(_token1, msg.sender, address(this), _amount1);
+
+            // Approve the position manager
+            TransferHelper.safeApprove(_token1, address(nonfungiblePositionManager), _amount1);
+        }
+
+        INonfungiblePositionManager.MintParams memory params =
+        INonfungiblePositionManager.MintParams({
+            token0: _token0,
+            token1: _token1,
+            fee: _fee,
+            tickLower: _lowerTick,
+            tickUpper: _upperTick,
+            amount0Desired: _amount0,
+            amount1Desired: _amount1,
+            amount0Min: 0,
+            amount1Min: 0,
+            recipient: address(this),
+            deadline: block.timestamp
+        });
+
+        (tokenId,liquidity,amount0,amount1) = nonfungiblePositionManager.mint(params);
+
+        // Remove allowance and refund in both assets.
+        if (amount0 < _amount0) {
+            TransferHelper.safeApprove(_token0, address(nonfungiblePositionManager), 0);
+            uint256 _refund0 = _amount0 - amount0;
+            TransferHelper.safeTransfer(_token0, msg.sender, _refund0);
+        }
+
+        if (amount1 < _amount1) {
+            TransferHelper.safeApprove(_token1, address(nonfungiblePositionManager), 0);
+            uint256 _refund1 = _amount1 - amount1;
+            TransferHelper.safeTransfer(_token1, msg.sender, _refund1);
+        }
+    }
+
+    function _collectTokensOwed(uint256 _tokenId)
+    private
+    returns (
+        uint256 _amount0,
+        uint256 _amount1
+    ) {
+
+        INonfungiblePositionManager.CollectParams memory params =
+            INonfungiblePositionManager.CollectParams({
+                tokenId: _tokenId,
+                recipient: address(this),
+                amount0Max: type(uint128).max,
+                amount1Max: type(uint128).max
+        });
+
+        // collect everything
+        (_amount0, _amount1) = nonfungiblePositionManager.collect(params);
+    }
+
+    function _removeLiquidity(uint256 _tokenId, uint128 _liquidityToRemove)
+    private
+    returns (
+        uint256 amount0,
+        uint256 amount1
+    ) {
+        INonfungiblePositionManager.DecreaseLiquidityParams memory params =
+            INonfungiblePositionManager.DecreaseLiquidityParams({
+                tokenId: _tokenId,
+                liquidity: _liquidityToRemove,
+                amount0Min: 0,
+                amount1Min: 0,
+                deadline: block.timestamp
+        });
+
+        (amount0, amount1) = nonfungiblePositionManager.decreaseLiquidity(params);
     }
 }
