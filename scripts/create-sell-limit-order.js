@@ -17,12 +17,12 @@ module.exports = async(callback) => {
         var BN = web3.utils.BN;
 
         // mainet addresses
-        // const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
-        // const token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
+        const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
+        const token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
 
         // kovan addresses
-        const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; // UNI
-        const token1 = "0x4f96fe3b7a6cf9725f59d353f723c1bdb64ca6aa"; // DAI
+        // const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; // UNI
+        // const token1 = "0x4f96fe3b7a6cf9725f59d353f723c1bdb64ca6aa"; // DAI
 
         const token0Instance = await ERC20.at(token0);
         const token1Instance = await ERC20.at(token1);
@@ -34,20 +34,20 @@ module.exports = async(callback) => {
         const amount1 = 0;
 
         // //mainnet
-        // const fee = 3000;
+        const fee = 3000;
 
         //kovan
-        const fee = 500;
+        // const fee = 500;
 
-        // // target price: 1 UNI = 26.5104 DAI --> sell UNI for DAI MAINNET
-        // let targetSqrtPriceX96 = encodeSqrtRatioX96(
-        //     JSBI.BigInt(265104),
-        //     JSBI.BigInt(10000));
+        // // target price: 1 UNI = 24.77582045420598 DAI --> sell UNI for DAI MAINNET
+        let targetSqrtPriceX96 = encodeSqrtRatioX96(
+            JSBI.BigInt(2477),
+            JSBI.BigInt(100));
 
         // target price: 1 UNI = 110.58 DAI --> sell UNI for DAI KOVAN
-        let targetSqrtPriceX96 = encodeSqrtRatioX96(
-            JSBI.BigInt(11058),
-            JSBI.BigInt(100));
+        // let targetSqrtPriceX96 = encodeSqrtRatioX96(
+        //     JSBI.BigInt(11058),
+        //     JSBI.BigInt(100));
 
         const tradeInstance = await LimitTradeManager.deployed();
 
@@ -71,7 +71,7 @@ module.exports = async(callback) => {
         console.log("Token1 --> " + token1.toString());
         console.log("Amount0 --> " + amount0.toString());
         console.log("Amount1 --> " + amount1.toString());
-        console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString(16));
+        console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
 
         const receipt = await tradeInstance.createLimitTrade(

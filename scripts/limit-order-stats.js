@@ -25,42 +25,48 @@ module.exports = async(callback) => {
 
         const tradeInstance = await LimitTradeManager.deployed();
 
-        const depositId = await tradeInstance.depositIdsPerAddress(currentAccount, 0);
-        const depositInfo = await tradeInstance.deposits(depositId);
+        const tokenIdsCount = await tradeInstance.tokenIdsPerAddressLength(currentAccount);
 
-        const tokenId = depositInfo.tokenId?.toString();
-        const tokensOwed0 = depositInfo.tokensOwed0?.toString();
-        const tokensOwed1 = depositInfo.tokensOwed1?.toString();
+        for (let i=0; i< tokenIdsCount; i++) {
 
-        console.log("Token0 owed: " + web3.utils.fromWei(tokensOwed0).toString());
-        console.log("Token1 owed: " + web3.utils.fromWei(tokensOwed1).toString());
+            console.log("=================================================");
+            const tokenId = await tradeInstance.tokenIdsPerAddress(currentAccount, i);
+            const depositInfo = await tradeInstance.deposits(tokenId);
 
-        if (depositInfo.closed == 0) {
-            // get token id info from univ3
-            const positionManagerInstance = await INonfungiblePositionManager.at(positionManager);
-            const position = await positionManagerInstance.positions(tokenId);
-            console.log("Position LowerLimit: " + decodeSqrtRatioX96(
-                getSqrtRatioAtTick(position.tickLower)).toString()
-            );
-            console.log("Position UpperLimit: " + decodeSqrtRatioX96(
-                getSqrtRatioAtTick(position.tickUpper)).toString()
-            );
+            console.log("TokenID: " + depositInfo.tokenId);
+            const tokensOwed0 = depositInfo.tokensOwed0?.toString();
+            const tokensOwed1 = depositInfo.tokensOwed1?.toString();
 
-            console.log(JSON.stringify(position));
+            console.log("Token0 owed: " + web3.utils.fromWei(tokensOwed0).toString());
+            console.log("Token1 owed: " + web3.utils.fromWei(tokensOwed1).toString());
 
-            // get current pool position info
-            const uniswapFactoryInstance = await IUniswapV3Factory.at(uniswapFactory);
-            const poolAddress = await uniswapFactoryInstance.getPool(position.token0, position.token1, position.fee);
-            const poolInstance = await IUniswapV3Pool.at(poolAddress);
+            if (depositInfo.closed == 0) {
+                // get token id info from univ3
+                const positionManagerInstance = await INonfungiblePositionManager.at(positionManager);
+                const position = await positionManagerInstance.positions(tokenId);
+                console.log("Position LowerLimit: " + decodeSqrtRatioX96(
+                    getSqrtRatioAtTick(position.tickLower)).toString()
+                );
+                console.log("Position UpperLimit: " + decodeSqrtRatioX96(
+                    getSqrtRatioAtTick(position.tickUpper)).toString()
+                );
 
-            const poolInfo = await poolInstance.slot0();
-            const decodedPrice = decodeSqrtRatioX96(
-                JSBI.BigInt(poolInfo.sqrtPriceX96.toString())
-            );
+                console.log(JSON.stringify(position));
 
-            console.log(JSON.stringify(poolInfo));
-            console.log("Pool CurrentPrice: " + decodedPrice.toString());
+                // get current pool position info
+                const uniswapFactoryInstance = await IUniswapV3Factory.at(uniswapFactory);
+                const poolAddress = await uniswapFactoryInstance.getPool(position.token0, position.token1, position.fee);
+                const poolInstance = await IUniswapV3Pool.at(poolAddress);
 
+                const poolInfo = await poolInstance.slot0();
+                const decodedPrice = decodeSqrtRatioX96(
+                    JSBI.BigInt(poolInfo.sqrtPriceX96.toString())
+                );
+
+                console.log(JSON.stringify(poolInfo));
+                console.log("Pool CurrentPrice: " + decodedPrice.toString());
+
+            }
         }
 
     } catch (error) {

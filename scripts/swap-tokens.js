@@ -3,13 +3,11 @@ const IERC20 = artifacts.require("IERC20");
 
 module.exports = async(callback) => {
 
-    const token0 = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"; //WETH
-    const token1 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
+    // swap from DAI to UNI
+    const token0 = "0x6b175474e89094c44da98b954eedeac495271d0f"; //DAI
+    const token1 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; // UNI
 
-    // const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
-    // const token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
-
-    const amount0 = web3.utils.toWei("40").toString();
+    const amount0 = web3.utils.toWei("100000").toString();
 
     const fee = "3000";
     const routerAddress = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
@@ -23,6 +21,14 @@ module.exports = async(callback) => {
         const token0Instance = await IERC20.at(token0);
         const token1Instance = await IERC20.at(token1);
 
+        if (amount0 > 0) {
+            await token0Instance.approve(
+                uniswapRouter.address,
+                amount0,
+                {from: currentAccount}
+            );
+        }
+
         const params = {
             tokenIn: token0,
             tokenOut: token1,
@@ -34,7 +40,7 @@ module.exports = async(callback) => {
             sqrtPriceLimitX96: 0,
         };
 
-        const receipt = await uniswapRouter.exactInputSingle(params, {value: amount0, from: currentAccount});
+        const receipt = await uniswapRouter.exactInputSingle(params, {from: currentAccount});
         console.log('receipt:', receipt);
 
         const balanceToken1 = await token1Instance.balanceOf(currentAccount);

@@ -16,26 +16,26 @@ module.exports = async(callback) => {
         var BN = web3.utils.BN;
 
         // mainet addresses
-        // const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
-        // const token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
+        const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
+        const token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
 
         // kovan addresses
-        const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; // UNI
-        const token1 = "0x4f96fe3b7a6cf9725f59d353f723c1bdb64ca6aa"; // DAI
+        // const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; // UNI
+        // const token1 = "0x4f96fe3b7a6cf9725f59d353f723c1bdb64ca6aa"; // DAI
 
         const amount0 = 0;
         const amount1 = web3.utils.toWei("20").toString();
         const fee = 3000;
 
         // target price: 1 UNI = 24.5104 DAI --> buy UNI for DAI
-        // let targetSqrtPriceX96 = encodeSqrtRatioX96(
-        //     JSBI.BigInt(245104),
-        //     JSBI.BigInt(10000));
+        let targetSqrtPriceX96 = encodeSqrtRatioX96(
+            JSBI.BigInt(245104),
+            JSBI.BigInt(10000));
 
         // target price: 1 UNI = 110.47 DAI --> buy UNI with DAI
-        let targetSqrtPriceX96 = encodeSqrtRatioX96(
-            JSBI.BigInt(11047),
-            JSBI.BigInt(100));
+        // let targetSqrtPriceX96 = encodeSqrtRatioX96(
+        //     JSBI.BigInt(11047),
+        //     JSBI.BigInt(100));
 
         const tradeInstance = await LimitTradeManager.deployed();
 
@@ -62,7 +62,7 @@ module.exports = async(callback) => {
         console.log("Token1 --> " + token1.toString());
         console.log("Amount0 --> " + amount0.toString());
         console.log("Amount1 --> " + amount1.toString());
-        console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString(16));
+        console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
 
         const receipt = await tradeInstance.createLimitTrade(

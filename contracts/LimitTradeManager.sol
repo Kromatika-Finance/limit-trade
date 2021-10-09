@@ -44,23 +44,18 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         address owner;
     }
 
-    event DepositCreated(address indexed owner, uint256 indexed depositId, uint256 indexed tokenId);
+    event DepositCreated(address indexed owner, uint256 indexed tokenId);
 
-    event DepositClosed(address indexed owner, uint256 indexed depositId, uint256 indexed tokenId);
+    event DepositClosed(address indexed owner, uint256 indexed tokenId);
 
-    event DepositClaimed(address indexed owner, uint256 indexed depositId, uint256 tokensOwed0, uint256 tokensOwed1);
+    event DepositClaimed(address indexed owner, uint256 indexed tokenId,
+        uint256 tokensOwed0, uint256 tokensOwed1);
 
-    /// @dev depositIdsPerAddress[address] => array of deposit ids
-    mapping(address => uint256[]) public depositIdsPerAddress;
+    /// @dev tokenIdsPerAddress[address] => array of token ids
+    mapping(address => uint256[]) public tokenIdsPerAddress;
 
-    /// @dev deposits per id
+    /// @dev deposits per token id
     mapping (uint256 => Deposit) public deposits;
-
-    /// @dev id per tokenId
-    mapping (uint256 => uint256) public depositIdPerToken;
-
-    /// @dev deposit count
-    uint256 public depositCount;
 
     /// @dev controller contract
     address public controller;
@@ -101,7 +96,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     }
 
     function createLimitTrade(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
-        uint160 _targetSqrtPriceX96 , uint24 _fee) external returns (uint256 _depositId, uint256 _tokenId) {
+        uint160 _targetSqrtPriceX96 , uint24 _fee) external returns (uint256 _tokenId) {
 
         address _poolAddress = factory.getPool(_token0, _token1, _fee);
         require (_poolAddress != address(0), "POOL_NOT_FOUND");
@@ -114,9 +109,6 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         );
 
         // Create a deposit
-        depositCount++;
-        _depositId = depositCount;
-
         Deposit memory newDeposit = Deposit({
             tokenId: _tokenId,
             opened: block.number,
@@ -128,22 +120,19 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
             owner: msg.sender
         });
 
-        deposits[_depositId] = newDeposit;
-        depositIdsPerAddress[msg.sender].push(_depositId);
-        depositIdPerToken[_tokenId] = _depositId;
+        deposits[_tokenId] = newDeposit;
+        tokenIdsPerAddress[msg.sender].push(_tokenId);
 
         // TODO enable this when ready
-        //ILimitSignalKeeper(keeper).startMonitor(_tokenId, _amount0, _amount1);
+        ILimitSignalKeeper(keeper).startMonitor(_tokenId, _amount0, _amount1);
 
-        emit DepositCreated(msg.sender, _depositId, _tokenId);
+        emit DepositCreated(msg.sender, _tokenId);
     }
 
     function closeLimitTrade(uint256 _tokenId) external override onlyKeeper
         returns (uint256 _amount0, uint256 _amount1) {
 
-        uint256 _depositId = depositIdPerToken[_tokenId];
-        require(_depositId != 0, "NOT_EXIST");
-        Deposit storage deposit = deposits[_depositId];
+        Deposit storage deposit = deposits[_tokenId];
         require(deposit.closed == 0, "DEPOSIT_CLOSED");
 
         uint256 tokensOwed0;
@@ -169,15 +158,15 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         // close the position
         nonfungiblePositionManager.burn(_tokenId);
 
-        emit DepositClosed(deposit.owner, _depositId, _tokenId);
+        emit DepositClosed(deposit.owner, _tokenId);
     }
 
-    function claimLimitTrade(uint256 _depositId, uint256 _nonce, bytes memory _signature) external {
+    function claimLimitTrade(uint256 _tokenId, uint256 _nonce, bytes memory _signature) external {
 
         // TODO add signature check
         //_checkSignature(_nonce, _signature);
 
-        Deposit storage deposit = deposits[_depositId];
+        Deposit storage deposit = deposits[_tokenId];
         require(deposit.closed > 0, "DEPOSIT_NOT_CLOSED");
         require(deposit.owner == msg.sender, "ONLY_OWNER");
 
@@ -194,15 +183,15 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
             TransferHelper.safeTransfer(deposit.token1, deposit.owner, _tokensToSend);
         }
 
-        emit DepositClaimed(msg.sender, _depositId, deposit.tokensOwed0, deposit.tokensOwed1);
+        emit DepositClaimed(msg.sender, _tokenId, deposit.tokensOwed0, deposit.tokensOwed1);
     }
 
     function changeKeeper(address _newKeeper) external onlyOwner {
         keeper = _newKeeper;
     }
 
-    function depositIdsPerAddressLength(address user) external view returns (uint256) {
-        return depositIdsPerAddress[user].length;
+    function tokenIdsPerAddressLength(address user) external view returns (uint256) {
+        return tokenIdsPerAddress[user].length;
     }
 
     function calculateLimitTicks(address _poolAddress, uint256 _amount0, uint256 _amount1,
@@ -217,7 +206,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         int24 tickFloor = _floor(_targetTick, tickSpacing);
         int24 tickCeil = tickFloor + tickSpacing;
 
-        // TODO do we need to compare _target tick with current tick ?!
+        require(tick != _targetTick, "SAME_TICKS");
 
         return _checkBidAskLiquidity(tickFloor - limitMargin, tickFloor,
             tickCeil, tickCeil + limitMargin,

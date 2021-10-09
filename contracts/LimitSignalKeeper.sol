@@ -27,6 +27,8 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
         uint256 tokensDeposit1;
     }
 
+    event BatchClosed(uint256 batchSize);
+
     /// @dev deposits per token Id
     mapping (uint256 => Deposit) public depositPerTokenId;
 
@@ -35,9 +37,6 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
 
     /// @dev tokens to monitor
     uint256[] public tokenIds;
-
-    /// @dev tokens to monitor
-    uint256[] public filledTokenIds;
 
     /// @dev limit trade manager
     ILimitTradeManager public limitTradeManager;
@@ -48,20 +47,24 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
     /// @dev univ3 factory
     IUniswapV3Factory factory;
 
+    /// @dev max batch size
+    uint256 public maxBatchSize;
+
     /// @dev only trade manager
     modifier onlyTradeManager() {
         require(msg.sender == address(limitTradeManager), "NOT_TRADE_MANAGER");
         _;
     }
 
-    constructor(
-        ILimitTradeManager _limitTradeManager,
+    constructor(ILimitTradeManager _limitTradeManager,
         INonfungiblePositionManager _nonfungiblePositionManager,
         IUniswapV3Factory _factory) {
 
         limitTradeManager = _limitTradeManager;
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
+
+        maxBatchSize = 100;
     }
 
 
@@ -96,20 +99,25 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
     ) {
 
         uint256 _tokenId;
-        delete filledTokenIds;
+        uint256[] memory batchTokenIds = new uint256[](maxBatchSize);
+        uint256 count;
 
         // iterate through all active tokens;
         for (uint256 i = 0; i < tokenIds.length; i++) {
             _tokenId = tokenIds[i];
             upkeepNeeded = _checkLimitConditions(_tokenId);
             if (upkeepNeeded) {
-                filledTokenIds.push(_tokenId);
+                batchTokenIds[count] = _tokenId;
+                count++;
+            }
+            if (count >= maxBatchSize) {
+                break;
             }
         }
 
-        upkeepNeeded = filledTokenIds.length > 0;
+        upkeepNeeded = count > 0;
         if (upkeepNeeded) {
-            performData = abi.encodePacked(filledTokenIds);
+            performData = abi.encode(batchTokenIds, count);
         }
     }
 
@@ -117,11 +125,13 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
         bytes calldata performData
     ) external override {
 
-        (uint256[] memory _tokenIds) = abi.decode(performData, (uint256[]));
-        for (uint256 i = 0; i < _tokenIds.length; i++) {
+        (uint256[] memory _tokenIds, uint256 count) = abi.decode(performData, (uint256[], uint256));
+        for (uint256 i = 0; i < count; i++) {
             _stopMonitor(_tokenIds[i]);
             limitTradeManager.closeLimitTrade(_tokenIds[i]);
         }
+
+        emit BatchClosed(_tokenIds.length);
     }
 
     function _stopMonitor(uint256 _tokenId) internal {
@@ -130,13 +140,16 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
 
         delete depositPerTokenId[_tokenId];
 
-        uint256 tokenIndexToRemove = tokenIndexPerTokenId[_tokenId];
+        uint256 tokenIndexToRemove = tokenIndexPerTokenId[_tokenId] - 1;
         uint256 lastTokenId = tokenIds[tokenIds.length - 1];
 
-        // move the last element into the deleted one
-        // TODO handle edge cases
-        tokenIds[tokenIndexToRemove] = lastTokenId;
-        tokenIndexPerTokenId[lastTokenId] = tokenIndexToRemove;
+        removeElementFromArray(tokenIndexToRemove, tokenIds);
+
+        if (tokenIds.length == 0) {
+            delete tokenIndexPerTokenId[lastTokenId];
+        } else if (tokenIndexToRemove != tokenIds.length) {
+            tokenIndexPerTokenId[lastTokenId] = tokenIndexToRemove + 1;
+        }
     }
 
     function _checkLimitConditions(uint256 _tokenId) internal view
@@ -154,11 +167,13 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
         // compare the actual liquidity vs deposit liquidity
         Deposit storage deposit = depositPerTokenId[_tokenId];
 
-        if (deposit.tokensDeposit0 > 0 && amount0 == 0) {
+        if (deposit.tokensDeposit0 == 0 && amount0 > 0
+            && deposit.tokensDeposit1 > 0 && amount1 == 0) {
             return true;
         }
 
-        if (deposit.tokensDeposit1 > 0 && amount1 == 0) {
+        if (deposit.tokensDeposit0 > 0 && amount0 == 0
+            && deposit.tokensDeposit1 == 0 && amount1 > 0) {
             return true;
         }
 
@@ -180,6 +195,18 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
             TickMath.getSqrtRatioAtTick(tickUpper),
             liquidity
         );
+    }
+
+    /// @notice Removes index element from the given array.
+    /// @param  index index to remove from the array
+    /// @param  array the array itself
+    function removeElementFromArray(uint256 index, uint256[] storage array) private {
+        if (index == array.length - 1) {
+            array.pop();
+        } else {
+            array[index] = array[array.length - 1];
+            array.pop();
+        }
     }
 
 }
