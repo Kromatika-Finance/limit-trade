@@ -125,13 +125,15 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
         bytes calldata performData
     ) external override {
 
-        (uint256[] memory _tokenIds, uint256 count) = abi.decode(performData, (uint256[], uint256));
+        (uint256[] memory _tokenIds, uint256 count) = abi.decode(
+            performData, (uint256[], uint256)
+        );
         for (uint256 i = 0; i < count; i++) {
             _stopMonitor(_tokenIds[i]);
             limitTradeManager.closeLimitTrade(_tokenIds[i]);
         }
 
-        emit BatchClosed(_tokenIds.length);
+        emit BatchClosed(count);
     }
 
     function _stopMonitor(uint256 _tokenId) internal {
