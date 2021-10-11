@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 import "@chainlink/contracts/src/v0.7/interfaces/KeeperCompatibleInterface.sol";
+import "@chainlink/contracts/src/v0.7/interfaces/AggregatorV3Interface.sol";
 
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
@@ -27,7 +28,14 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
         uint256 tokensDeposit1;
     }
 
-    event BatchClosed(uint256 batchSize);
+    struct BatchInfo {
+        uint256 count;
+        uint256 gasCost;
+    }
+
+    uint256 private constant GAS_OVERHEAD = 100_000;
+
+    event BatchClosed(uint256 batchId, uint256 batchSize, uint256 gasUsed);
 
     /// @dev deposits per token Id
     mapping (uint256 => Deposit) public depositPerTokenId;
@@ -50,6 +58,12 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
     /// @dev max batch size
     uint256 public maxBatchSize;
 
+    uint256 batchCount;
+
+    mapping(uint256 => BatchInfo) public override batchInfo;
+
+    AggregatorV3Interface public immutable FAST_GAS_FEED;
+
     /// @dev only trade manager
     modifier onlyTradeManager() {
         require(msg.sender == address(limitTradeManager), "NOT_TRADE_MANAGER");
@@ -58,11 +72,14 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
 
     constructor(ILimitTradeManager _limitTradeManager,
         INonfungiblePositionManager _nonfungiblePositionManager,
-        IUniswapV3Factory _factory) {
+        IUniswapV3Factory _factory,
+        AggregatorV3Interface _fastGasFeed) {
 
         limitTradeManager = _limitTradeManager;
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
+
+        FAST_GAS_FEED = _fastGasFeed;
 
         maxBatchSize = 100;
     }
@@ -125,15 +142,31 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
         bytes calldata performData
     ) external override {
 
+        uint256 gasUsed = gasleft();
+        batchCount++;
+
         (uint256[] memory _tokenIds, uint256 count) = abi.decode(
             performData, (uint256[], uint256)
         );
         for (uint256 i = 0; i < count; i++) {
             _stopMonitor(_tokenIds[i]);
-            limitTradeManager.closeLimitTrade(_tokenIds[i]);
+            limitTradeManager.closeLimitTrade(_tokenIds[i], batchCount);
         }
 
-        emit BatchClosed(count);
+        gasUsed = gasUsed - gasleft();
+        // TODO multiply the gasUsed with a ceiling multiplier
+
+        // 1. multiply gasUsed with fast gas price to get the eth used
+        (,int256 feedValue, ,uint256 timestamp, ) = FAST_GAS_FEED.latestRoundData();
+        uint256 weiForGas = uint256(feedValue).mul(gasUsed.add(GAS_OVERHEAD));
+
+        // 2. save batch Info (count, total gascost, price)
+        batchInfo[batchCount] = BatchInfo({
+            count: count,
+            gasCost: weiForGas
+        });
+
+        emit BatchClosed(batchCount, count, gasUsed);
     }
 
     function _stopMonitor(uint256 _tokenId) internal {

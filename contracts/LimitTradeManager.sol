@@ -41,6 +41,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         uint256 tokensOwed0;
         uint256 tokensOwed1;
         uint256 closed;
+        uint256 batchId;
         address owner;
     }
 
@@ -49,7 +50,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     event DepositClosed(address indexed owner, uint256 indexed tokenId);
 
     event DepositClaimed(address indexed owner, uint256 indexed tokenId,
-        uint256 tokensOwed0, uint256 tokensOwed1);
+        uint256 tokensOwed0, uint256 tokensOwed1, uint256 payment);
 
     /// @dev tokenIdsPerAddress[address] => array of token ids
     mapping(address => uint256[]) public tokenIdsPerAddress;
@@ -57,11 +58,8 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     /// @dev deposits per token id
     mapping (uint256 => Deposit) public deposits;
 
-    /// @dev controller contract
-    address public controller;
-
     /// @dev keeper contract
-    address public keeper;
+    ILimitSignalKeeper public keeper;
 
     /// @dev uniV3 position manager
     INonfungiblePositionManager public immutable nonfungiblePositionManager;
@@ -72,23 +70,18 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     /// @dev univ3 factory
     IUniswapV3Factory factory;
 
-    /// @dev margin for the limit trades
-    int24 public limitMargin;
-
     /// @dev only keeper
     modifier onlyKeeper() {
-        require(msg.sender == keeper, "NOT_KEEPER");
+        require(msg.sender == address(keeper), "NOT_KEEPER");
         _;
     }
 
-    constructor(address _controller, address _keeper, int24 _limitMargin,
+    constructor(ILimitSignalKeeper _keeper,
             INonfungiblePositionManager _nonfungiblePositionManager,
             IUniswapV3Factory _factory,
             IWETH9 _WETH) {
 
-        controller = _controller;
         keeper = _keeper;
-        limitMargin = _limitMargin;
 
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
@@ -117,19 +110,19 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
             tokensOwed0: 0,
             tokensOwed1: 0,
             closed: 0,
+            batchId: 0,
             owner: msg.sender
         });
 
         deposits[_tokenId] = newDeposit;
         tokenIdsPerAddress[msg.sender].push(_tokenId);
 
-        // TODO enable this when ready
-        ILimitSignalKeeper(keeper).startMonitor(_tokenId, _amount0, _amount1);
+        keeper.startMonitor(_tokenId, _amount0, _amount1);
 
         emit DepositCreated(msg.sender, _tokenId);
     }
 
-    function closeLimitTrade(uint256 _tokenId) external override onlyKeeper
+    function closeLimitTrade(uint256 _tokenId, uint256 _batchId) external override onlyKeeper
         returns (uint256 _amount0, uint256 _amount1) {
 
         Deposit storage deposit = deposits[_tokenId];
@@ -152,6 +145,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
 
         // update the state
         deposit.closed = block.number;
+        deposit.batchId = _batchId;
         deposit.tokensOwed0 = _amount0;
         deposit.tokensOwed1 = _amount1;
 
@@ -161,14 +155,19 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         emit DepositClosed(deposit.owner, _tokenId);
     }
 
-    function claimLimitTrade(uint256 _tokenId, uint256 _nonce, bytes memory _signature) external {
+    function claimLimitTrade(uint256 _tokenId) external payable {
 
-        // TODO add signature check
-        //_checkSignature(_nonce, _signature);
+        // TODO
+        // 1. when claiming we need to know in which batchId this tokenId was included.
+        // 2. when we find it, owedAmount is the ETH amount to be paid by the owner.
+        // 3. the owedAmount will be send to treasury and will be used to replenish the keeper LINK funds.
 
         Deposit storage deposit = deposits[_tokenId];
         require(deposit.closed > 0, "DEPOSIT_NOT_CLOSED");
         require(deposit.owner == msg.sender, "ONLY_OWNER");
+
+        (uint256 count, uint256 gasCost) = keeper.batchInfo(deposit.batchId);
+        require(gasCost.div(count) <= msg.value, "NO_COMPENSATION");
 
         uint256 _tokensToSend = deposit.tokensOwed0;
 
@@ -183,7 +182,8 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
             TransferHelper.safeTransfer(deposit.token1, deposit.owner, _tokensToSend);
         }
 
-        emit DepositClaimed(msg.sender, _tokenId, deposit.tokensOwed0, deposit.tokensOwed1);
+        // TODO send the msg.value to treasury
+        emit DepositClaimed(msg.sender, _tokenId, deposit.tokensOwed0, deposit.tokensOwed1, msg.value);
     }
 
     function changeKeeper(address _newKeeper) external onlyOwner {
@@ -208,8 +208,8 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
 
         require(tick != _targetTick, "SAME_TICKS");
 
-        return _checkBidAskLiquidity(tickFloor - limitMargin, tickFloor,
-            tickCeil, tickCeil + limitMargin,
+        return _checkBidAskLiquidity(tickFloor - tickSpacing, tickFloor,
+            tickCeil, tickCeil + tickSpacing,
             _amount0, _amount1,
             _pool, tickSpacing);
 
@@ -234,12 +234,6 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         } else {
             (_lowerTick, _upperTick) = (_askLower, _askUpper);
         }
-    }
-
-    function _checkSignature(uint256 nonce, bytes memory signature) internal view {
-        bytes32 hash = keccak256(abi.encodePacked(msg.value, controller, nonce));
-        // Verify that the message's signer is the controller);
-        require(ECDSA.recover(hash, signature) == controller, "ERR_NO_AUTH");
     }
 
     /// @dev Wrapper around `LiquidityAmounts.getLiquidityForAmounts()`.
