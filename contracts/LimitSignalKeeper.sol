@@ -58,11 +58,16 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
     /// @dev max batch size
     uint256 public maxBatchSize;
 
+    /// @dev internal between 2 upkeeps, in blocks
+    uint256 public upkeepInterval;
+
+    /// @dev last upkeep block
+    uint256 public lastUpkeep;
+
+    /// @dev batch count
     uint256 batchCount;
 
     mapping(uint256 => BatchInfo) public override batchInfo;
-
-    AggregatorV3Interface public immutable FAST_GAS_FEED;
 
     /// @dev only trade manager
     modifier onlyTradeManager() {
@@ -73,15 +78,15 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
     constructor(ILimitTradeManager _limitTradeManager,
         INonfungiblePositionManager _nonfungiblePositionManager,
         IUniswapV3Factory _factory,
-        AggregatorV3Interface _fastGasFeed) {
+        uint256 _maxBatchSize,
+        uint256 _upkeepInterval) {
 
         limitTradeManager = _limitTradeManager;
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
 
-        FAST_GAS_FEED = _fastGasFeed;
-
-        maxBatchSize = 100;
+        maxBatchSize = _maxBatchSize;
+        upkeepInterval = _upkeepInterval;
     }
 
 
@@ -115,26 +120,28 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
         bytes memory performData
     ) {
 
-        uint256 _tokenId;
-        uint256[] memory batchTokenIds = new uint256[](maxBatchSize);
-        uint256 count;
+        if (upkeepNeeded = (block.number - lastUpkeep) > upkeepInterval) {
+            uint256 _tokenId;
+            uint256[] memory batchTokenIds = new uint256[](maxBatchSize);
+            uint256 count;
 
-        // iterate through all active tokens;
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            _tokenId = tokenIds[i];
-            upkeepNeeded = _checkLimitConditions(_tokenId);
+            // iterate through all active tokens;
+            for (uint256 i = 0; i < tokenIds.length; i++) {
+                _tokenId = tokenIds[i];
+                upkeepNeeded = _checkLimitConditions(_tokenId);
+                if (upkeepNeeded) {
+                    batchTokenIds[count] = _tokenId;
+                    count++;
+                }
+                if (count >= maxBatchSize) {
+                    break;
+                }
+            }
+
+            upkeepNeeded = count > 0;
             if (upkeepNeeded) {
-                batchTokenIds[count] = _tokenId;
-                count++;
+                performData = abi.encode(batchTokenIds, count);
             }
-            if (count >= maxBatchSize) {
-                break;
-            }
-        }
-
-        upkeepNeeded = count > 0;
-        if (upkeepNeeded) {
-            performData = abi.encode(batchTokenIds, count);
         }
     }
 
@@ -148,25 +155,29 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
         (uint256[] memory _tokenIds, uint256 count) = abi.decode(
             performData, (uint256[], uint256)
         );
+
+        uint256 _tokenId;
+        uint256 _processed;
         for (uint256 i = 0; i < count; i++) {
-            _stopMonitor(_tokenIds[i]);
-            limitTradeManager.closeLimitTrade(_tokenIds[i], batchCount);
+            _tokenId = _tokenIds[i];
+            if (_checkLimitConditions(_tokenId)) {
+                _processed ++;
+                _stopMonitor(_tokenId);
+                limitTradeManager.closeLimitTrade(_tokenId, batchCount);
+            }
         }
 
         gasUsed = gasUsed - gasleft();
-        // TODO multiply the gasUsed with a ceiling multiplier
+        uint256 weiForGas = _calculateGasCost(gasUsed);
 
-        // 1. multiply gasUsed with fast gas price to get the eth used
-        (,int256 feedValue, ,uint256 timestamp, ) = FAST_GAS_FEED.latestRoundData();
-        uint256 weiForGas = uint256(feedValue).mul(gasUsed.add(GAS_OVERHEAD));
-
-        // 2. save batch Info (count, total gascost, price)
+        // TODO store price to pay instead of gas cost and _processed
         batchInfo[batchCount] = BatchInfo({
-            count: count,
+            count: _processed,
             gasCost: weiForGas
         });
+        lastUpkeep = block.number;
 
-        emit BatchClosed(batchCount, count, gasUsed);
+        emit BatchClosed(batchCount, _processed, gasUsed);
     }
 
     function _stopMonitor(uint256 _tokenId) internal {
@@ -214,6 +225,16 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
 
         return false;
     }
+
+    function _calculateGasCost(uint256 _gasUsed) internal view
+    returns (uint256 weiForGas) {
+
+        // 1. multiply gasUsed with fast gas price to get the eth used; add some margin
+        //(,int256 feedValue, ,uint256 timestamp, ) = FAST_GAS_FEED.latestRoundData();
+        uint256 gasPrice = tx.gasprice;
+        weiForGas = gasPrice.mul(_gasUsed.add(GAS_OVERHEAD));
+    }
+
 
     /// @dev Wrapper around `LiquidityAmounts.getAmountsForLiquidity()`.
     function _amountsForLiquidity(

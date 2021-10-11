@@ -157,9 +157,6 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
 
     function claimLimitTrade(uint256 _tokenId) external payable {
 
-        // TODO
-        // 1. when claiming we need to know in which batchId this tokenId was included.
-        // 2. when we find it, owedAmount is the ETH amount to be paid by the owner.
         // 3. the owedAmount will be send to treasury and will be used to replenish the keeper LINK funds.
 
         Deposit storage deposit = deposits[_tokenId];
@@ -169,6 +166,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         (uint256 count, uint256 gasCost) = keeper.batchInfo(deposit.batchId);
         require(gasCost.div(count) <= msg.value, "NO_COMPENSATION");
 
+        // TODO add check to revert when there are no tokens owed anymore
         uint256 _tokensToSend = deposit.tokensOwed0;
 
         if (_tokensToSend > 0) {
@@ -187,7 +185,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     }
 
     function changeKeeper(address _newKeeper) external onlyOwner {
-        keeper = _newKeeper;
+        keeper = ILimitSignalKeeper(_newKeeper);
     }
 
     function tokenIdsPerAddressLength(address user) external view returns (uint256) {
