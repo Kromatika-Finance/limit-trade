@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 pragma solidity >=0.7.5;
 pragma abicoder v2;
 
@@ -29,13 +31,14 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
     }
 
     struct BatchInfo {
-        uint256 count;
-        uint256 gasCost;
+        uint256 payment;
+        address creator;
     }
 
-    uint256 private constant GAS_OVERHEAD = 100_000;
+    uint256 private constant FEE_MULTIPLIER = 100000;
+    uint256 private constant MAX_BATCH_SIZE = 50;
 
-    event BatchClosed(uint256 batchId, uint256 batchSize, uint256 gasUsed);
+    event BatchClosed(uint256 batchId, uint256 batchSize, uint256 gasUsed, uint256 weiForGas);
 
     /// @dev deposits per token Id
     mapping (uint256 => Deposit) public depositPerTokenId;
@@ -53,19 +56,22 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
     INonfungiblePositionManager public immutable nonfungiblePositionManager;
 
     /// @dev univ3 factory
-    IUniswapV3Factory factory;
+    IUniswapV3Factory public factory;
 
     /// @dev max batch size
-    uint256 public maxBatchSize;
+    uint256 public batchSize;
 
-    /// @dev internal between 2 upkeeps, in blocks
+    /// @dev interval between 2 upkeeps, in blocks
     uint256 public upkeepInterval;
 
     /// @dev last upkeep block
     uint256 public lastUpkeep;
 
     /// @dev batch count
-    uint256 batchCount;
+    uint256 public batchCount;
+
+    //  @dev keeper fee keeperFee / FEE_MULTIPLIER = x
+    uint256 public keeperFee;
 
     mapping(uint256 => BatchInfo) public override batchInfo;
 
@@ -78,15 +84,20 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
     constructor(ILimitTradeManager _limitTradeManager,
         INonfungiblePositionManager _nonfungiblePositionManager,
         IUniswapV3Factory _factory,
-        uint256 _maxBatchSize,
-        uint256 _upkeepInterval) {
+        uint256 _batchSize,
+        uint256 _upkeepInterval,
+        uint256 _keeperFee) {
+
+        require(_keeperFee <= FEE_MULTIPLIER, "INVALID_FEE");
+        require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
 
         limitTradeManager = _limitTradeManager;
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
 
-        maxBatchSize = _maxBatchSize;
+        batchSize = _batchSize;
         upkeepInterval = _upkeepInterval;
+        keeperFee = _keeperFee;
     }
 
 
@@ -107,14 +118,14 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
         }
     }
 
-    function stopMonitor(uint256 _tokenId) external onlyTradeManager {
+    function stopMonitor(uint256 _tokenId) external override onlyTradeManager {
         _stopMonitor(_tokenId);
     }
 
     function checkUpkeep(
         bytes calldata checkData
     )
-    external override
+    external view override
     returns (
         bool upkeepNeeded,
         bytes memory performData
@@ -122,7 +133,7 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
 
         if (upkeepNeeded = (block.number - lastUpkeep) > upkeepInterval) {
             uint256 _tokenId;
-            uint256[] memory batchTokenIds = new uint256[](maxBatchSize);
+            uint256[] memory batchTokenIds = new uint256[](batchSize);
             uint256 count;
 
             // iterate through all active tokens;
@@ -133,7 +144,7 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
                     batchTokenIds[count] = _tokenId;
                     count++;
                 }
-                if (count >= maxBatchSize) {
+                if (count >= batchSize) {
                     break;
                 }
             }
@@ -157,27 +168,36 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
         );
 
         uint256 _tokenId;
-        uint256 _processed;
         for (uint256 i = 0; i < count; i++) {
             _tokenId = _tokenIds[i];
-            if (_checkLimitConditions(_tokenId)) {
-                _processed ++;
-                _stopMonitor(_tokenId);
-                limitTradeManager.closeLimitTrade(_tokenId, batchCount);
-            }
+            _stopMonitor(_tokenId);
+            limitTradeManager.closeLimitTrade(_tokenId, batchCount);
         }
 
         gasUsed = gasUsed - gasleft();
         uint256 weiForGas = _calculateGasCost(gasUsed);
 
-        // TODO store price to pay instead of gas cost and _processed
         batchInfo[batchCount] = BatchInfo({
-            count: _processed,
-            gasCost: weiForGas
+            payment: weiForGas.div(count),
+            creator: msg.sender
         });
         lastUpkeep = block.number;
 
-        emit BatchClosed(batchCount, _processed, gasUsed);
+        emit BatchClosed(batchCount, count, gasUsed, weiForGas);
+    }
+
+    function changeBatchSize(uint256 _batchSize) external onlyOwner {
+        require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
+        batchSize = _batchSize;
+    }
+
+    function changeUpkeepInterval(uint256 _upkeepInterval) external onlyOwner {
+        upkeepInterval = _upkeepInterval;
+    }
+
+    function changeKeeperFee(uint256 _keeperFee) external onlyOwner {
+        require(_keeperFee <= FEE_MULTIPLIER, "INVALID_FEE");
+        keeperFee = _keeperFee;
     }
 
     function _stopMonitor(uint256 _tokenId) internal {
@@ -229,10 +249,12 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
     function _calculateGasCost(uint256 _gasUsed) internal view
     returns (uint256 weiForGas) {
 
-        // 1. multiply gasUsed with fast gas price to get the eth used; add some margin
-        //(,int256 feedValue, ,uint256 timestamp, ) = FAST_GAS_FEED.latestRoundData();
         uint256 gasPrice = tx.gasprice;
-        weiForGas = gasPrice.mul(_gasUsed.add(GAS_OVERHEAD));
+        // TODO add some _gasUsed margin
+        weiForGas = gasPrice.mul(_gasUsed);
+
+        // charge keeper fee on top of weiForGas
+        weiForGas = weiForGas.mul(FEE_MULTIPLIER.add(keeperFee)).div(FEE_MULTIPLIER);
     }
 
 

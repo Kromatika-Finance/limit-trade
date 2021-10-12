@@ -7,9 +7,7 @@ import "@openzeppelin/contracts/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import '@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol';
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/cryptography/ECDSA.sol";
 
 import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
@@ -23,7 +21,6 @@ import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PositionKey.sol";
 
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
-import "@uniswap/v3-periphery/contracts/interfaces/IQuoterV2.sol";
 
 import "./interfaces/ILimitSignalKeeper.sol";
 import "./interfaces/ILimitTradeManager.sol";
@@ -68,7 +65,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     IWETH9 public WETH;
 
     /// @dev univ3 factory
-    IUniswapV3Factory factory;
+    IUniswapV3Factory public factory;
 
     /// @dev only keeper
     modifier onlyKeeper() {
@@ -117,6 +114,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         deposits[_tokenId] = newDeposit;
         tokenIdsPerAddress[msg.sender].push(_tokenId);
 
+        // TODO select from a pool of keepers
         keeper.startMonitor(_tokenId, _amount0, _amount1);
 
         emit DepositCreated(msg.sender, _tokenId);
@@ -128,60 +126,51 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         Deposit storage deposit = deposits[_tokenId];
         require(deposit.closed == 0, "DEPOSIT_CLOSED");
 
-        uint256 tokensOwed0;
-        uint256 tokensOwed1;
-
-        (,,,,,,,uint128 liquidity,,,,) = nonfungiblePositionManager.positions(_tokenId);
-
-        if (liquidity > 0) {
-            (tokensOwed0, tokensOwed1) = _removeLiquidity(_tokenId, liquidity);
-        }
-
-        if (tokensOwed0 > 0 || tokensOwed1 > 0) {
-            (tokensOwed0, tokensOwed1) = _collectTokensOwed(_tokenId);
-            _amount0 += tokensOwed0;
-            _amount1 += tokensOwed1;
-        }
-
         // update the state
         deposit.closed = block.number;
         deposit.batchId = _batchId;
+
+        (_amount0, _amount1) = _closePosition(_tokenId);
+
         deposit.tokensOwed0 = _amount0;
         deposit.tokensOwed1 = _amount1;
 
-        // close the position
-        nonfungiblePositionManager.burn(_tokenId);
+        emit DepositClosed(deposit.owner, _tokenId);
+    }
+
+
+    function emergencyCloseLimitTrade(uint256 _tokenId) external
+    returns (uint256 _amount0, uint256 _amount1) {
+
+        Deposit storage deposit = deposits[_tokenId];
+        require(deposit.closed == 0, "DEPOSIT_CLOSED");
+        require(deposit.owner == msg.sender, "NOT_OWNER");
+
+        // update the state
+        deposit.closed = block.number;
+        keeper.stopMonitor(_tokenId);
+
+        (_amount0, _amount1) = _closePosition(_tokenId);
+
+        if (_amount0 > 0) {
+            TransferHelper.safeTransfer(deposit.token0, deposit.owner, _amount0);
+        }
+
+        if (_amount1 > 0) {
+            TransferHelper.safeTransfer(deposit.token1, deposit.owner, _amount1);
+        }
 
         emit DepositClosed(deposit.owner, _tokenId);
     }
 
     function claimLimitTrade(uint256 _tokenId) external payable {
+        _claimLimitTrade(_tokenId);
+    }
 
-        // 3. the owedAmount will be send to treasury and will be used to replenish the keeper LINK funds.
-
-        Deposit storage deposit = deposits[_tokenId];
-        require(deposit.closed > 0, "DEPOSIT_NOT_CLOSED");
-        require(deposit.owner == msg.sender, "ONLY_OWNER");
-
-        (uint256 count, uint256 gasCost) = keeper.batchInfo(deposit.batchId);
-        require(gasCost.div(count) <= msg.value, "NO_COMPENSATION");
-
-        // TODO add check to revert when there are no tokens owed anymore
-        uint256 _tokensToSend = deposit.tokensOwed0;
-
-        if (_tokensToSend > 0) {
-            deposit.tokensOwed0 = 0;
-            TransferHelper.safeTransfer(deposit.token0, deposit.owner, _tokensToSend);
+    function batchClaim(uint256[] calldata tokenIds) external payable {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            _claimLimitTrade(tokenIds[i]);
         }
-
-        _tokensToSend = deposit.tokensOwed1;
-        if (_tokensToSend > 0) {
-            deposit.tokensOwed1 = 0;
-            TransferHelper.safeTransfer(deposit.token1, deposit.owner, _tokensToSend);
-        }
-
-        // TODO send the msg.value to treasury
-        emit DepositClaimed(msg.sender, _tokenId, deposit.tokensOwed0, deposit.tokensOwed1, msg.value);
     }
 
     function changeKeeper(address _newKeeper) external onlyOwner {
@@ -211,6 +200,58 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
             _amount0, _amount1,
             _pool, tickSpacing);
 
+    }
+
+    function _claimLimitTrade(uint256 _tokenId) internal {
+
+        Deposit storage deposit = deposits[_tokenId];
+        require(deposit.closed > 0, "DEPOSIT_NOT_CLOSED");
+
+        (uint256 payment, address creator) = keeper.batchInfo(deposit.batchId);
+        require(payment <= msg.value, "NO_PAYMENT");
+
+        uint256 _tokensToSend0 = deposit.tokensOwed0;
+        uint256 _tokensToSend1 = deposit.tokensOwed1;
+
+        require(_tokensToSend0 > 0 || _tokensToSend1 > 0, "NO_TOKENS_OWED");
+
+        if (_tokensToSend0 > 0) {
+            deposit.tokensOwed0 = 0;
+            TransferHelper.safeTransfer(deposit.token0, deposit.owner, _tokensToSend0);
+        }
+
+        if (_tokensToSend1 > 0) {
+            deposit.tokensOwed1 = 0;
+            TransferHelper.safeTransfer(deposit.token1, deposit.owner, _tokensToSend1);
+        }
+
+        // TODO charge service fee
+        // payment = _chargeFee(payment);
+        // if using Chainlink keepers, convert ETH to LINK before sending to the creator
+        TransferHelper.safeTransferETH(creator, payment);
+
+        emit DepositClaimed(msg.sender, _tokenId, _tokensToSend0, _tokensToSend1, msg.value);
+    }
+
+    function _closePosition(uint256 _tokenId) internal returns (uint256 _amount0, uint256 _amount1) {
+
+        uint256 tokensOwed0;
+        uint256 tokensOwed1;
+
+        (,,,,,,,uint128 liquidity,,,,) = nonfungiblePositionManager.positions(_tokenId);
+
+        if (liquidity > 0) {
+            (tokensOwed0, tokensOwed1) = _removeLiquidity(_tokenId, liquidity);
+        }
+
+        if (tokensOwed0 > 0 || tokensOwed1 > 0) {
+            (tokensOwed0, tokensOwed1) = _collectTokensOwed(_tokenId);
+            _amount0 += tokensOwed0;
+            _amount1 += tokensOwed1;
+        }
+
+        // close the position
+        nonfungiblePositionManager.burn(_tokenId);
     }
 
     function _checkBidAskLiquidity(int24 _bidLower, int24 _bidUpper,
@@ -253,7 +294,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         );
     }
 
-    function _checkRange(int24 _tickLower, int24 _tickUpper, int24 _tickSpacing) internal view {
+    function _checkRange(int24 _tickLower, int24 _tickUpper, int24 _tickSpacing) internal pure {
         require(_tickLower < _tickUpper, "tickLower < tickUpper");
         require(_tickLower >= TickMath.MIN_TICK, "tickLower too low");
         require(_tickUpper <= TickMath.MAX_TICK, "tickUpper too high");
@@ -263,7 +304,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
 
     /// @dev Rounds tick down towards negative infinity so that it's a multiple
     /// of `tickSpacing`.
-    function _floor(int24 tick, int24 _tickSpacing) internal view returns (int24) {
+    function _floor(int24 tick, int24 _tickSpacing) internal pure returns (int24) {
         int24 compressed = tick / _tickSpacing;
         if (tick < 0 && tick % _tickSpacing != 0) compressed--;
         return compressed * _tickSpacing;
@@ -274,6 +315,12 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         assert(x <= type(uint128).max);
         return uint128(x);
     }
+
+//    function _chargeFee(uint256 payment) private returns (uint256) {
+//        uint256 feeDue = payment.mul(serviceFee).div(10**23);
+//        TransferHelper.safeTransferETH(serviceProvider, feeDue);
+//        return payment.sub(feeDue);
+//    }
 
     function _mintNewPosition(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
         int24 _lowerTick, int24 _upperTick,
