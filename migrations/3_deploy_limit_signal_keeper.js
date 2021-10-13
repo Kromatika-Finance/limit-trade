@@ -11,7 +11,7 @@ module.exports = async function (deployer, network, accounts) {
 
   //_maxBatchSize = 50 _upkeepInterval = 1, _keeperFee = 10 %
   await deployer.deploy(LimitTradeMonitor,
-      limitTradeManagerInstance.address, positionManager, uniswapFactory, 50, 1, 10000);
+      limitTradeManagerInstance.address, positionManager, uniswapFactory, 50, 500, 1, 10000);
 
   const limitTradeMonitorInstance = await LimitTradeMonitor.deployed()
   await limitTradeManagerInstance.addMonitor(limitTradeMonitorInstance.address);

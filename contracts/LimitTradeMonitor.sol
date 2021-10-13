@@ -4,7 +4,6 @@ pragma solidity >=0.7.5;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
-import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 import "@chainlink/contracts/src/v0.7/interfaces/KeeperCompatibleInterface.sol";
@@ -36,7 +35,8 @@ contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInter
     }
 
     uint256 private constant FEE_MULTIPLIER = 100000;
-    uint256 private constant MAX_BATCH_SIZE = 50;
+    uint256 private constant MAX_BATCH_SIZE = 100;
+    uint256 private constant MAX_MONITOR_SIZE = 1000;
 
     event BatchClosed(uint256 batchId, uint256 batchSize, uint256 gasUsed, uint256 weiForGas);
 
@@ -60,6 +60,9 @@ contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInter
 
     /// @dev max batch size
     uint256 public batchSize;
+
+    /// @dev max monitor size
+    uint256 public monitorSize;
 
     /// @dev interval between 2 upkeeps, in blocks
     uint256 public upkeepInterval;
@@ -85,17 +88,21 @@ contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInter
         INonfungiblePositionManager _nonfungiblePositionManager,
         IUniswapV3Factory _factory,
         uint256 _batchSize,
+        uint256 _monitorSize,
         uint256 _upkeepInterval,
         uint256 _keeperFee) {
 
         require(_keeperFee <= FEE_MULTIPLIER, "INVALID_FEE");
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
+        require(_monitorSize <= MAX_MONITOR_SIZE, "INVALID_MONITOR_SIZE");
+        require(_batchSize <= _monitorSize, "SIZE_MISMATCH");
 
         limitTradeManager = _limitTradeManager;
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
 
         batchSize = _batchSize;
+        monitorSize = _monitorSize;
         upkeepInterval = _upkeepInterval;
         keeperFee = _keeperFee;
     }
@@ -104,6 +111,8 @@ contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInter
     function startMonitor(
         uint256 _tokenId, uint256 _amount0, uint256 _amount1
     ) external override onlyTradeManager {
+
+        require(tokenIds.length < MAX_MONITOR_SIZE, "MONITOR_FULL");
 
         if (depositPerTokenId[_tokenId].tokenId == 0) {
             Deposit memory newDeposit = Deposit({
@@ -188,7 +197,16 @@ contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInter
 
     function setBatchSize(uint256 _batchSize) external onlyOwner {
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
+        require(_batchSize <= monitorSize, "SIZE_MISMATCH");
+
         batchSize = _batchSize;
+    }
+
+    function setMonitorSize(uint256 _monitorSize) external onlyOwner {
+        require(_monitorSize <= MAX_MONITOR_SIZE, "INVALID_MONITOR_SIZE");
+        require(_monitorSize >= batchSize, "SIZE_MISMATCH");
+
+        monitorSize = _monitorSize;
     }
 
     function setUpkeepInterval(uint256 _upkeepInterval) external onlyOwner {

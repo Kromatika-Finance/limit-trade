@@ -9,13 +9,10 @@ module.exports = async(callback) => {
         const currentAccount = accounts[0];
 
         const tradeInstance = await LimitTradeManager.deployed();
-        const depositId = await tradeInstance.depositIdsPerAddress(currentAccount, 0);
-        const depositInfo = await tradeInstance.deposits(depositId);
 
-        const tokenId = depositInfo.tokenId?.toString();
-        console.log("Position TokenID: " + tokenId);
+        const tokenId = "140377";
 
-        const receipt = await tradeInstance.closeLimitTrade(
+        const receipt = await tradeInstance.fastCloseLimitTrade(
             tokenId,
             {from: currentAccount}
         );

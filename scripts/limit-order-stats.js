@@ -34,11 +34,6 @@ module.exports = async(callback) => {
             const depositInfo = await tradeInstance.deposits(tokenId);
 
             console.log("TokenID: " + depositInfo.tokenId);
-            const tokensOwed0 = depositInfo.tokensOwed0?.toString();
-            const tokensOwed1 = depositInfo.tokensOwed1?.toString();
-
-            console.log("Token0 owed: " + web3.utils.fromWei(tokensOwed0).toString());
-            console.log("Token1 owed: " + web3.utils.fromWei(tokensOwed1).toString());
 
             if (depositInfo.closed == 0) {
                 // get token id info from univ3

@@ -57,6 +57,8 @@ module.exports = async(callback) => {
                 amount0,
                 {from: currentAccount}
                 );
+
+            console.log((await token0Instance.allowance(currentAccount, tradeInstance.address)).toString());
         }
 
         if (amount1 > 0) {
@@ -65,6 +67,8 @@ module.exports = async(callback) => {
                 amount1,
                 {from: currentAccount}
             );
+
+            console.log((await token1Instance.allowance(currentAccount, tradeInstance.address)).toString());
         }
 
         console.log("Token0 --> " + token0.toString());

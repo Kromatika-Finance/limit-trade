@@ -27,9 +27,9 @@ module.exports = async(callback) => {
         const amount1 = web3.utils.toWei("200").toString();
         const fee = 3000;
 
-        // target price: 1 UNI = 24.5104 DAI --> buy UNI for DAI
+        // target price: 1 UNI = 23.5104 DAI --> buy UNI for DAI
         let targetSqrtPriceX96 = encodeSqrtRatioX96(
-            JSBI.BigInt(245104),
+            JSBI.BigInt(235104),
             JSBI.BigInt(10000));
 
         // target price: 1 DAI = 98750.8 XLN --> buy XLN with DAI

@@ -4,8 +4,6 @@ pragma solidity >=0.7.5;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
-import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
@@ -54,7 +52,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     ILimitTradeMonitor[] public monitors;
 
     //  @dev last monitor index + 1 ; always > 0
-    uint256 public lastMonitor;
+    uint256 public nextMonitor;
 
     /// @dev uniV3 position manager
     INonfungiblePositionManager public immutable nonfungiblePositionManager;
@@ -84,7 +82,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
             _poolAddress, _amount0, _amount1, _targetSqrtPriceX96
         );
         (_tokenId,,_amount0,_amount1) = _mintNewPosition(
-            _token0, _token1, _amount0, _amount1, _lowerTick, _upperTick, _fee
+            _token0, _token1, _amount0, _amount1, _lowerTick, _upperTick, _fee, msg.sender
         );
 
         ILimitTradeMonitor _monitor = _selectMonitor();
@@ -228,12 +226,12 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         uint256 monitorLength = monitors.length;
         require(monitorLength > 0, "NO_MONITORS");
 
-        uint256 _selectedIndex = lastMonitor == monitorLength
+        uint256 _selectedIndex = nextMonitor == monitorLength
             ? 0
-            : lastMonitor + 1;
+            : nextMonitor;
 
         _monitor = monitors[_selectedIndex];
-        lastMonitor = _selectedIndex + 1;
+        nextMonitor = _selectedIndex + 1;
     }
 
     function _checkBidAskLiquidity(int24 _bidLower, int24 _bidUpper,
@@ -306,7 +304,8 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
 
     function _mintNewPosition(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
         int24 _lowerTick, int24 _upperTick,
-        uint24 _fee)
+        uint24 _fee,
+        address _owner)
     private
     returns (
         uint256 tokenId,
@@ -315,21 +314,8 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         uint256 amount1
     ) {
 
-        if (_amount0 > 0) {
-            // transfer tokens to contract
-            TransferHelper.safeTransferFrom(_token0, msg.sender, address(this), _amount0);
-
-            // Approve the position manager
-            TransferHelper.safeApprove(_token0, address(nonfungiblePositionManager), _amount0);
-        }
-
-        if (_amount1 > 0) {
-            // transfer tokens to contract
-            TransferHelper.safeTransferFrom(_token1, msg.sender, address(this), _amount1);
-
-            // Approve the position manager
-            TransferHelper.safeApprove(_token1, address(nonfungiblePositionManager), _amount1);
-        }
+        _approveAndTransferToUniswap(_token0, _amount0, _owner);
+        _approveAndTransferToUniswap(_token1, _amount1, _owner);
 
         INonfungiblePositionManager.MintParams memory params =
         INonfungiblePositionManager.MintParams({
@@ -350,16 +336,30 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
 
         // Remove allowance and refund in both assets.
         if (amount0 < _amount0) {
-            TransferHelper.safeApprove(_token0, address(nonfungiblePositionManager), 0);
-            uint256 _refund0 = _amount0 - amount0;
-            TransferHelper.safeTransfer(_token0, msg.sender, _refund0);
+            _removeAllowanceAndRefund(_token0, _amount0 - amount0, _owner);
         }
 
         if (amount1 < _amount1) {
-            TransferHelper.safeApprove(_token1, address(nonfungiblePositionManager), 0);
-            uint256 _refund1 = _amount1 - amount1;
-            TransferHelper.safeTransfer(_token1, msg.sender, _refund1);
+            _removeAllowanceAndRefund(_token1, _amount1 - amount1, _owner);
         }
+    }
+
+    /// @dev Approve transfer to position manager
+    function _approveAndTransferToUniswap(address _token, uint256 _amount, address _owner) private {
+
+        if (_amount > 0) {
+            // transfer tokens to contract
+            TransferHelper.safeTransferFrom(_token, _owner, address(this), _amount);
+
+            // Approve the position manager
+            TransferHelper.safeApprove(_token, address(nonfungiblePositionManager), _amount);
+        }
+    }
+
+    /// @dev Remove allowance and refund
+    function _removeAllowanceAndRefund(address _token, uint256 _amount, address _owner) private {
+        TransferHelper.safeApprove(_token, address(nonfungiblePositionManager), 0);
+        TransferHelper.safeTransfer(_token, _owner, _amount);
     }
 
     function _collectTokensOwed(uint256 _tokenId, address _owner)
