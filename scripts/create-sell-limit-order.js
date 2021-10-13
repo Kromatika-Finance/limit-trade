@@ -21,8 +21,8 @@ module.exports = async(callback) => {
         const token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
 
         // kovan addresses
-        // const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; // UNI
-        // const token1 = "0x4f96fe3b7a6cf9725f59d353f723c1bdb64ca6aa"; // DAI
+        // const token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
+        // const token1 = "0x6Ba45c470776fF94568A5802015B8b25965c2CEC"; // XLN
 
         const token0Instance = await ERC20.at(token0);
         const token1Instance = await ERC20.at(token1);
@@ -37,17 +37,17 @@ module.exports = async(callback) => {
         const fee = 3000;
 
         //kovan
-        // const fee = 500;
+        //const fee = 500;
 
-        // // target price: 1 UNI = 24.77582045420598 DAI --> sell UNI for DAI MAINNET
+        // // target price: 1 UNI = 25.377 DAI --> sell UNI for DAI MAINNET
         let targetSqrtPriceX96 = encodeSqrtRatioX96(
-            JSBI.BigInt(2477),
-            JSBI.BigInt(100));
+            JSBI.BigInt(25377),
+            JSBI.BigInt(1000));
 
-        // target price: 1 UNI = 110.58 DAI --> sell UNI for DAI KOVAN
+        // target price: 1 DAI = 100150 XLN --> sell UNI for DAI KOVAN
         // let targetSqrtPriceX96 = encodeSqrtRatioX96(
-        //     JSBI.BigInt(11058),
-        //     JSBI.BigInt(100));
+        //     JSBI.BigInt(100150),
+        //     JSBI.BigInt(1));
 
         const tradeInstance = await LimitTradeManager.deployed();
 
@@ -74,7 +74,7 @@ module.exports = async(callback) => {
         console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
 
-        const receipt = await tradeInstance.createLimitTrade(
+        const receipt = await tradeInstance.openLimitTrade(
             token0,
             token1,
             amount0,

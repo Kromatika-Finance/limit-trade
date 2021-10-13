@@ -6,8 +6,5 @@ module.exports = async function (deployer, network, accounts) {
   const positionManager = process.env.UNISWAP_POSITION_MANAGER;
   const uniswapFactory = process.env.UNISWAP_FACTORY;
 
-  const keeper = accounts[0];
-
-  await deployer.deploy(LimitTradeManager,
-      keeper, positionManager, uniswapFactory, wrappedETHAddress);
+  await deployer.deploy(LimitTradeManager,positionManager, uniswapFactory, wrappedETHAddress);
 };

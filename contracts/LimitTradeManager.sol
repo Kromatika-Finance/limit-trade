@@ -6,23 +6,19 @@ pragma abicoder v2;
 import "@openzeppelin/contracts/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol";
-import "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3MintCallback.sol";
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
-import "@uniswap/v3-periphery/contracts/libraries/PositionKey.sol";
 
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 
-import "./interfaces/ILimitSignalKeeper.sol";
+import "./interfaces/ILimitTradeMonitor.sol";
 import "./interfaces/ILimitTradeManager.sol";
 
 /// @title  LimitTradeManager
@@ -35,11 +31,10 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         uint256 opened;
         address token0;
         address token1;
-        uint256 tokensOwed0;
-        uint256 tokensOwed1;
         uint256 closed;
         uint256 batchId;
         address owner;
+        ILimitTradeMonitor monitor;
     }
 
     event DepositCreated(address indexed owner, uint256 indexed tokenId);
@@ -55,8 +50,11 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     /// @dev deposits per token id
     mapping (uint256 => Deposit) public deposits;
 
-    /// @dev keeper contract
-    ILimitSignalKeeper public keeper;
+    /// @dev monitor pool
+    ILimitTradeMonitor[] public monitors;
+
+    //  @dev last monitor index + 1 ; always > 0
+    uint256 public lastMonitor;
 
     /// @dev uniV3 position manager
     INonfungiblePositionManager public immutable nonfungiblePositionManager;
@@ -67,25 +65,16 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     /// @dev univ3 factory
     IUniswapV3Factory public factory;
 
-    /// @dev only keeper
-    modifier onlyKeeper() {
-        require(msg.sender == address(keeper), "NOT_KEEPER");
-        _;
-    }
-
-    constructor(ILimitSignalKeeper _keeper,
-            INonfungiblePositionManager _nonfungiblePositionManager,
+    constructor(INonfungiblePositionManager _nonfungiblePositionManager,
             IUniswapV3Factory _factory,
             IWETH9 _WETH) {
-
-        keeper = _keeper;
 
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
         WETH = _WETH;
     }
 
-    function createLimitTrade(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
+    function openLimitTrade(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
         uint160 _targetSqrtPriceX96 , uint24 _fee) external returns (uint256 _tokenId) {
 
         address _poolAddress = factory.getPool(_token0, _token1, _fee);
@@ -98,48 +87,46 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
             _token0, _token1, _amount0, _amount1, _lowerTick, _upperTick, _fee
         );
 
+        ILimitTradeMonitor _monitor = _selectMonitor();
+
         // Create a deposit
         Deposit memory newDeposit = Deposit({
             tokenId: _tokenId,
             opened: block.number,
             token0: _token0,
             token1: _token1,
-            tokensOwed0: 0,
-            tokensOwed1: 0,
             closed: 0,
             batchId: 0,
-            owner: msg.sender
+            owner: msg.sender,
+            monitor: _monitor
         });
 
         deposits[_tokenId] = newDeposit;
         tokenIdsPerAddress[msg.sender].push(_tokenId);
 
-        // TODO select from a pool of keepers
-        keeper.startMonitor(_tokenId, _amount0, _amount1);
+        _monitor.startMonitor(_tokenId, _amount0, _amount1);
 
         emit DepositCreated(msg.sender, _tokenId);
     }
 
-    function closeLimitTrade(uint256 _tokenId, uint256 _batchId) external override onlyKeeper
+    function closeLimitTrade(uint256 _tokenId, uint256 _batchId) external override
         returns (uint256 _amount0, uint256 _amount1) {
 
         Deposit storage deposit = deposits[_tokenId];
+        require(msg.sender == address(deposit.monitor), "NOT_MONITOR");
         require(deposit.closed == 0, "DEPOSIT_CLOSED");
 
         // update the state
         deposit.closed = block.number;
         deposit.batchId = _batchId;
 
-        (_amount0, _amount1) = _closePosition(_tokenId);
-
-        deposit.tokensOwed0 = _amount0;
-        deposit.tokensOwed1 = _amount1;
+        (_amount0, _amount1) = _removeLiquidity(_tokenId);
 
         emit DepositClosed(deposit.owner, _tokenId);
     }
 
 
-    function emergencyCloseLimitTrade(uint256 _tokenId) external
+    function fastCloseLimitTrade(uint256 _tokenId) external
     returns (uint256 _amount0, uint256 _amount1) {
 
         Deposit storage deposit = deposits[_tokenId];
@@ -148,17 +135,14 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
 
         // update the state
         deposit.closed = block.number;
-        keeper.stopMonitor(_tokenId);
+        deposit.monitor.stopMonitor(_tokenId);
 
-        (_amount0, _amount1) = _closePosition(_tokenId);
-
-        if (_amount0 > 0) {
-            TransferHelper.safeTransfer(deposit.token0, deposit.owner, _amount0);
-        }
-
-        if (_amount1 > 0) {
-            TransferHelper.safeTransfer(deposit.token1, deposit.owner, _amount1);
-        }
+        // remove liquidity
+        (_amount0, _amount1) = _removeLiquidity(_tokenId);
+        // collect the fees
+        (_amount0, _amount1) = _collectTokensOwed(_tokenId, deposit.owner);
+        // burn the position
+        nonfungiblePositionManager.burn(_tokenId);
 
         emit DepositClosed(deposit.owner, _tokenId);
     }
@@ -173,8 +157,9 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         }
     }
 
-    function changeKeeper(address _newKeeper) external onlyOwner {
-        keeper = ILimitSignalKeeper(_newKeeper);
+    function addMonitor(ILimitTradeMonitor _newMonitor) external onlyOwner {
+        require(address(_newMonitor) != address(0), "ZERO_ADDRESS");
+        monitors.push(_newMonitor);
     }
 
     function tokenIdsPerAddressLength(address user) external view returns (uint256) {
@@ -204,26 +189,21 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
 
     function _claimLimitTrade(uint256 _tokenId) internal {
 
+        // TODO implement minting of governance token proportional to the claiming _tokenId
+
         Deposit storage deposit = deposits[_tokenId];
         require(deposit.closed > 0, "DEPOSIT_NOT_CLOSED");
 
-        (uint256 payment, address creator) = keeper.batchInfo(deposit.batchId);
+        (uint256 payment, address creator) = deposit.monitor.batchInfo(deposit.batchId);
         require(payment <= msg.value, "NO_PAYMENT");
 
-        uint256 _tokensToSend0 = deposit.tokensOwed0;
-        uint256 _tokensToSend1 = deposit.tokensOwed1;
+        // collect the fees
+        (uint256 _tokensToSend0, uint256 _tokensToSend1) = _collectTokensOwed(_tokenId, deposit.owner);
+
+        // close the position
+        nonfungiblePositionManager.burn(_tokenId);
 
         require(_tokensToSend0 > 0 || _tokensToSend1 > 0, "NO_TOKENS_OWED");
-
-        if (_tokensToSend0 > 0) {
-            deposit.tokensOwed0 = 0;
-            TransferHelper.safeTransfer(deposit.token0, deposit.owner, _tokensToSend0);
-        }
-
-        if (_tokensToSend1 > 0) {
-            deposit.tokensOwed1 = 0;
-            TransferHelper.safeTransfer(deposit.token1, deposit.owner, _tokensToSend1);
-        }
 
         // TODO charge service fee
         // payment = _chargeFee(payment);
@@ -233,25 +213,27 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         emit DepositClaimed(msg.sender, _tokenId, _tokensToSend0, _tokensToSend1, msg.value);
     }
 
-    function _closePosition(uint256 _tokenId) internal returns (uint256 _amount0, uint256 _amount1) {
-
-        uint256 tokensOwed0;
-        uint256 tokensOwed1;
+    function _removeLiquidity(uint256 _tokenId) internal
+        returns (uint256 _amount0, uint256 _amount1) {
 
         (,,,,,,,uint128 liquidity,,,,) = nonfungiblePositionManager.positions(_tokenId);
 
         if (liquidity > 0) {
-            (tokensOwed0, tokensOwed1) = _removeLiquidity(_tokenId, liquidity);
+            (_amount0, _amount1) = _removeLiquidity(_tokenId, liquidity);
         }
+    }
 
-        if (tokensOwed0 > 0 || tokensOwed1 > 0) {
-            (tokensOwed0, tokensOwed1) = _collectTokensOwed(_tokenId);
-            _amount0 += tokensOwed0;
-            _amount1 += tokensOwed1;
-        }
+    function _selectMonitor() internal returns (ILimitTradeMonitor _monitor) {
 
-        // close the position
-        nonfungiblePositionManager.burn(_tokenId);
+        uint256 monitorLength = monitors.length;
+        require(monitorLength > 0, "NO_MONITORS");
+
+        uint256 _selectedIndex = lastMonitor == monitorLength
+            ? 0
+            : lastMonitor + 1;
+
+        _monitor = monitors[_selectedIndex];
+        lastMonitor = _selectedIndex + 1;
     }
 
     function _checkBidAskLiquidity(int24 _bidLower, int24 _bidUpper,
@@ -380,7 +362,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         }
     }
 
-    function _collectTokensOwed(uint256 _tokenId)
+    function _collectTokensOwed(uint256 _tokenId, address _owner)
     private
     returns (
         uint256 _amount0,
@@ -390,7 +372,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         INonfungiblePositionManager.CollectParams memory params =
             INonfungiblePositionManager.CollectParams({
                 tokenId: _tokenId,
-                recipient: address(this),
+                recipient: _owner,
                 amount0Max: type(uint128).max,
                 amount1Max: type(uint128).max
         });

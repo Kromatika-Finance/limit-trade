@@ -1,5 +1,6 @@
 const LimitTradeManager = artifacts.require("LimitTradeManager");
 const IERC20 = artifacts.require("IERC20");
+const LimitTradeMonitor = artifacts.require("LimitTradeMonitor");
 
 module.exports = async(callback) => {
 
@@ -9,14 +10,20 @@ module.exports = async(callback) => {
         const currentAccount = accounts[0];
 
         const tradeInstance = await LimitTradeManager.deployed();
-        const depositId = await tradeInstance.depositIdsPerAddress(currentAccount, 0);
+        const tokenId = "139892";
 
-        // claim funds
+        const depositInfo = await tradeInstance.deposits(tokenId);
+        console.log(JSON.stringify(depositInfo));
+
+        const limitSignalInstance = await LimitTradeMonitor.deployed();
+        const batchPayment = await limitSignalInstance.batchInfo(depositInfo.batchId);
+
+        console.log(JSON.stringify(batchPayment));
+
+        //claim funds
         const receipt = await tradeInstance.claimLimitTrade(
-            depositId,
-            1,
-            '0x',
-            {from: currentAccount}
+            tokenId,
+            {value: batchPayment.payment, from: currentAccount}
         );
         console.log('receipt:', receipt);
 

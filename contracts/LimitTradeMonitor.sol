@@ -16,11 +16,11 @@ import "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.s
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 
-import "./interfaces/ILimitSignalKeeper.sol";
+import "./interfaces/ILimitTradeMonitor.sol";
 import "./interfaces/ILimitTradeManager.sol";
 
-/// @title  LimitSignalKeeper
-contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInterface {
+/// @title  LimitTradeMonitor
+contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInterface {
 
     using SafeMath for uint256;
 
@@ -186,16 +186,16 @@ contract LimitSignalKeeper is Ownable, ILimitSignalKeeper, KeeperCompatibleInter
         emit BatchClosed(batchCount, count, gasUsed, weiForGas);
     }
 
-    function changeBatchSize(uint256 _batchSize) external onlyOwner {
+    function setBatchSize(uint256 _batchSize) external onlyOwner {
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
         batchSize = _batchSize;
     }
 
-    function changeUpkeepInterval(uint256 _upkeepInterval) external onlyOwner {
+    function setUpkeepInterval(uint256 _upkeepInterval) external onlyOwner {
         upkeepInterval = _upkeepInterval;
     }
 
-    function changeKeeperFee(uint256 _keeperFee) external onlyOwner {
+    function setKeeperFee(uint256 _keeperFee) external onlyOwner {
         require(_keeperFee <= FEE_MULTIPLIER, "INVALID_FEE");
         keeperFee = _keeperFee;
     }

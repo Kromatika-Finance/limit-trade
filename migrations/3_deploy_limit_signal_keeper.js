@@ -1,5 +1,5 @@
 const LimitTradeManager = artifacts.require("LimitTradeManager");
-const LimitSignalKeeper = artifacts.require("LimitSignalKeeper");
+const LimitTradeMonitor = artifacts.require("LimitTradeMonitor");
 
 module.exports = async function (deployer, network, accounts) {
 
@@ -10,9 +10,9 @@ module.exports = async function (deployer, network, accounts) {
 
 
   //_maxBatchSize = 50 _upkeepInterval = 1, _keeperFee = 10 %
-  await deployer.deploy(LimitSignalKeeper,
+  await deployer.deploy(LimitTradeMonitor,
       limitTradeManagerInstance.address, positionManager, uniswapFactory, 50, 1, 10000);
 
-  const limitSignalKeeperInstance = await LimitSignalKeeper.deployed()
-  await limitTradeManagerInstance.changeKeeper(limitSignalKeeperInstance.address);
+  const limitTradeMonitorInstance = await LimitTradeMonitor.deployed()
+  await limitTradeManagerInstance.addMonitor(limitTradeMonitorInstance.address);
 };

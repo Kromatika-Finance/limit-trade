@@ -20,11 +20,11 @@ module.exports = async(callback) => {
         const token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
 
         // kovan addresses
-        // const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; // UNI
-        // const token1 = "0x4f96fe3b7a6cf9725f59d353f723c1bdb64ca6aa"; // DAI
+        // const token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
+        // const token1 = "0x6Ba45c470776fF94568A5802015B8b25965c2CEC"; // XLN
 
         const amount0 = 0;
-        const amount1 = web3.utils.toWei("20").toString();
+        const amount1 = web3.utils.toWei("200").toString();
         const fee = 3000;
 
         // target price: 1 UNI = 24.5104 DAI --> buy UNI for DAI
@@ -32,10 +32,10 @@ module.exports = async(callback) => {
             JSBI.BigInt(245104),
             JSBI.BigInt(10000));
 
-        // target price: 1 UNI = 110.47 DAI --> buy UNI with DAI
+        // target price: 1 DAI = 98750.8 XLN --> buy XLN with DAI
         // let targetSqrtPriceX96 = encodeSqrtRatioX96(
-        //     JSBI.BigInt(11047),
-        //     JSBI.BigInt(100));
+        //     JSBI.BigInt(98659),
+        //     JSBI.BigInt(1));
 
         const tradeInstance = await LimitTradeManager.deployed();
 
@@ -65,7 +65,7 @@ module.exports = async(callback) => {
         console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
 
-        const receipt = await tradeInstance.createLimitTrade(
+        const receipt = await tradeInstance.openLimitTrade(
             token0,
             token1,
             amount0,
