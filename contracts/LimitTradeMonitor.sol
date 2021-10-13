@@ -112,7 +112,7 @@ contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInter
         uint256 _tokenId, uint256 _amount0, uint256 _amount1
     ) external override onlyTradeManager {
 
-        require(tokenIds.length < MAX_MONITOR_SIZE, "MONITOR_FULL");
+        require(tokenIds.length < monitorSize, "MONITOR_FULL");
 
         if (depositPerTokenId[_tokenId].tokenId == 0) {
             Deposit memory newDeposit = Deposit({
@@ -179,6 +179,7 @@ contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInter
         uint256 _tokenId;
         for (uint256 i = 0; i < count; i++) {
             _tokenId = _tokenIds[i];
+            require(_checkLimitConditions(_tokenId), "INVALID_TRADE");
             _stopMonitor(_tokenId);
             limitTradeManager.closeLimitTrade(_tokenId, batchCount);
         }
