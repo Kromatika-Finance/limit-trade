@@ -1,4 +1,4 @@
-const LimitTradeMonitor = artifacts.require("LimitTradeMonitor");
+const LimitOrderMonitor = artifacts.require("LimitOrderMonitor");
 
 module.exports = async(callback) => {
 
@@ -10,7 +10,7 @@ module.exports = async(callback) => {
         const accounts = await web3.eth.getAccounts();
         const currentAccount = accounts[0];
 
-        const limitMonitor = await LimitTradeMonitor.deployed();
+        const limitMonitor = await LimitOrderMonitor.deployed();
 
         const receipt = await limitMonitor.checkUpkeep.call('0x');
         console.log('receipt:', receipt.upkeepNeeded);

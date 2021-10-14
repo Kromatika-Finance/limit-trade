@@ -1,4 +1,4 @@
-const LimitTradeManager = artifacts.require("LimitTradeManager");
+const LimitOrderManager = artifacts.require("LimitOrderManager");
 const IERC20 = artifacts.require("IERC20");
 
 module.exports = async(callback) => {
@@ -8,7 +8,7 @@ module.exports = async(callback) => {
         const accounts = await web3.eth.getAccounts();
         const currentAccount = accounts[0];
 
-        const tradeInstance = await LimitTradeManager.deployed();
+        const tradeInstance = await LimitOrderManager.deployed();
 
         const tokenId = "140788";
 

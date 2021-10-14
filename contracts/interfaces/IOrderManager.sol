@@ -2,9 +2,9 @@
 
 pragma solidity >=0.7.5;
 
-interface ILimitTradeManager {
+interface IOrderManager {
 
-    function closeLimitTrade(
+    function closeOrder(
         uint256 _tokenId, uint256 _batchId
     ) external returns (uint256, uint256);
 

@@ -1,4 +1,4 @@
-const LimitTradeManager = artifacts.require("LimitTradeManager");
+const LimitOrderManager = artifacts.require("LimitOrderManager");
 const INonfungiblePositionManager = artifacts.require("INonfungiblePositionManager");
 const IUniswapV3Factory = artifacts.require("IUniswapV3Factory");
 const IUniswapV3Pool = artifacts.require("IUniswapV3Pool");
@@ -23,7 +23,7 @@ module.exports = async(callback) => {
         const accounts = await web3.eth.getAccounts();
         const currentAccount = accounts[0];
 
-        const tradeInstance = await LimitTradeManager.deployed();
+        const tradeInstance = await LimitOrderManager.deployed();
 
         const tokenIdsCount = await tradeInstance.tokenIdsPerAddressLength(currentAccount);
 

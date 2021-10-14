@@ -2,7 +2,7 @@
 
 pragma solidity >=0.7.5;
 
-interface ILimitTradeMonitor {
+interface IOrderMonitor {
 
     function batchInfo(uint256 batchId) external view returns (uint256 payment, address creator);
 

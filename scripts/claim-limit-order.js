@@ -1,6 +1,6 @@
-const LimitTradeManager = artifacts.require("LimitTradeManager");
+const LimitOrderManager = artifacts.require("LimitOrderManager");
 const IERC20 = artifacts.require("IERC20");
-const LimitTradeMonitor = artifacts.require("LimitTradeMonitor");
+const LimitOrderMonitor = artifacts.require("LimitOrderMonitor");
 
 module.exports = async(callback) => {
 
@@ -9,19 +9,19 @@ module.exports = async(callback) => {
         const accounts = await web3.eth.getAccounts();
         const currentAccount = accounts[0];
 
-        const tradeInstance = await LimitTradeManager.deployed();
+        const tradeInstance = await LimitOrderManager.deployed();
         const tokenId = "140647";
 
         const depositInfo = await tradeInstance.deposits(tokenId);
         console.log(JSON.stringify(depositInfo));
 
-        const limitMonitor = await LimitTradeMonitor.deployed();
+        const limitMonitor = await LimitOrderMonitor.deployed();
         const batchPayment = await limitMonitor.batchInfo(depositInfo.batchId);
 
         console.log(JSON.stringify(batchPayment));
 
         //claim funds
-        const receipt = await tradeInstance.claimLimitTrade(
+        const receipt = await tradeInstance.claimOrderFunds(
             tokenId,
             {value: batchPayment.payment, from: currentAccount}
         );

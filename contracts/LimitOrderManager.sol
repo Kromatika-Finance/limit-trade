@@ -17,11 +17,11 @@ import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 
-import "./interfaces/ILimitTradeMonitor.sol";
-import "./interfaces/ILimitTradeManager.sol";
+import "./interfaces/IOrderMonitor.sol";
+import "./interfaces/IOrderManager.sol";
 
-/// @title  LimitTradeManager
-contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgradeable {
+/// @title  LimitOrderManager
+contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable {
 
     using SafeMath for uint256;
 
@@ -33,8 +33,8 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
         uint256 closed;
         uint256 batchId;
         address owner;
-        ILimitTradeMonitor monitor;
         uint256 ownerIndex;
+        IOrderMonitor monitor;
     }
 
     uint256 private constant FEE_MULTIPLIER = 100000;
@@ -55,7 +55,7 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
     mapping (uint256 => Deposit) public deposits;
 
     /// @dev monitor pool
-    ILimitTradeMonitor[] public monitors;
+    IOrderMonitor[] public monitors;
 
     //  @dev last monitor index + 1 ; always > 0
     uint256 public nextMonitor;
@@ -91,40 +91,41 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
         OwnableUpgradeable.__Ownable_init();
     }
 
-    function openLimitTradeETH(address _token, uint256 _amount,
-        uint160 _targetSqrtPriceX96 , uint24 _fee) external payable returns (uint256 _tokenId) {
+    function openOrderETH(address _token, uint24 _fee, uint160 _sqrtPriceX96, uint256 _amount)
+    external payable returns (uint256 _tokenId) {
 
         // make sure that _targetSqrtPriceX96 is also calculated according to the sort
+        address _token0;
+        address _token1;
+        uint256 _amount0;
+        uint256 _amount1;
 
-        address token0;
-        address token1;
-        uint256 amount0;
-        uint256 amount1;
-
-        address wethAddress = address(WETH);
-        if (wethAddress < _token) {
-            token0 = wethAddress;
-            amount0 = msg.value;
-            token1 = _token;
-            amount1 = _amount;
-        } else {
-            token0 = _token;
-            amount0 = _amount;
-            token1 = wethAddress;
-            amount1 = msg.value;
+        {
+            address wethAddress = address(WETH);
+            if (wethAddress < _token) {
+                _token0 = wethAddress;
+                _amount0 = msg.value;
+                _token1 = _token;
+                _amount1 = _amount;
+            } else {
+                _token0 = _token;
+                _amount0 = _amount;
+                _token1 = wethAddress;
+                _amount1 = msg.value;
+            }
         }
 
-        return openLimitTrade(token0, token1, amount0, amount1, _targetSqrtPriceX96, _fee);
+        return openOrder(_token0, _token1, _fee, _sqrtPriceX96, _amount0, _amount1);
     }
 
-    function openLimitTrade(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
-        uint160 _targetSqrtPriceX96 , uint24 _fee) public returns (uint256 _tokenId) {
+    function openOrder(address _token0, address _token1, uint24 _fee, uint160 _sqrtPriceX96,
+        uint256 _amount0, uint256 _amount1) public returns (uint256 _tokenId) {
 
         address _poolAddress = factory.getPool(_token0, _token1, _fee);
         require (_poolAddress != address(0), "POOL_NOT_FOUND");
 
         (int24 _lowerTick, int24 _upperTick) = calculateLimitTicks(
-            _poolAddress, _amount0, _amount1, _targetSqrtPriceX96
+            _poolAddress, _amount0, _amount1, _sqrtPriceX96
         );
         (_tokenId,,_amount0,_amount1) = _mintNewPosition(
             _token0, _token1, _amount0, _amount1, _lowerTick, _upperTick, _fee, msg.sender
@@ -133,7 +134,7 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
         _createDeposit(_tokenId, _token0, _token1, _amount0, _amount1, msg.sender);
     }
 
-    function closeLimitTrade(uint256 _tokenId, uint256 _batchId) external override
+    function closeOrder(uint256 _tokenId, uint256 _batchId) external override
         returns (uint256 _amount0, uint256 _amount1) {
 
         Deposit storage deposit = deposits[_tokenId];
@@ -150,7 +151,7 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
     }
 
 
-    function cancelLimitTrade(uint256 _tokenId) external
+    function cancelOrder(uint256 _tokenId) external
     returns (uint256 _amount0, uint256 _amount1) {
 
         Deposit storage deposit = deposits[_tokenId];
@@ -173,14 +174,8 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
         emit DepositCancelled(deposit.owner, _tokenId);
     }
 
-    function claimLimitTrade(uint256 _tokenId) external payable {
-        _claimLimitTrade(_tokenId);
-    }
-
-    function batchClaim(uint256[] calldata tokenIds) external payable {
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            _claimLimitTrade(tokenIds[i]);
-        }
+    function claimOrderFunds(uint256 _tokenId) external payable {
+        _claimOrderFunds(_tokenId);
     }
 
     function retrieveToken(uint256 _tokenId) external {
@@ -238,7 +233,7 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
         return this.onERC721Received.selector;
     }
 
-    function setMonitors(ILimitTradeMonitor[] calldata _newMonitors) external onlyOwner {
+    function setMonitors(IOrderMonitor[] calldata _newMonitors) external onlyOwner {
         require(_newMonitors.length > 0, "NO_MONITORS");
         monitors = _newMonitors;
     }
@@ -258,20 +253,20 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
     }
 
     function calculateLimitTicks(address _poolAddress, uint256 _amount0, uint256 _amount1,
-        uint160 _targetSqrtPriceX96) public view
+        uint160 _sqrtPriceX96) public view
     returns (int24 _lowerTick, int24 _upperTick) {
 
         IUniswapV3Pool _pool = IUniswapV3Pool(_poolAddress);
         int24 tickSpacing = _pool.tickSpacing();
         (, int24 tick, , , , , ) = _pool.slot0();
 
-        int24 _targetTick = TickMath.getTickAtSqrtRatio(_targetSqrtPriceX96);
+        int24 _targetTick = TickMath.getTickAtSqrtRatio(_sqrtPriceX96);
         int24 tickFloor = _floor(_targetTick, tickSpacing);
         int24 tickCeil = tickFloor + tickSpacing;
 
         require(tick != _targetTick, "SAME_TICKS");
 
-        return _checkBidAskLiquidity(tickFloor - tickSpacing, tickFloor,
+        return _checkLiquidityRange(tickFloor - tickSpacing, tickFloor,
             tickCeil, tickCeil + tickSpacing,
             _amount0, _amount1,
             _pool, tickSpacing);
@@ -281,20 +276,20 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
     function _createDeposit(uint256 _tokenId, address _token0, address _token1,
         uint256 _amount0, uint256 _amount1, address _owner) internal {
 
-        ILimitTradeMonitor _monitor = _selectMonitor();
+        IOrderMonitor _monitor = _selectMonitor();
         tokenIdsPerAddress[_owner].push(_tokenId);
 
         // Create a deposit
         Deposit memory newDeposit = Deposit({
-        tokenId: _tokenId,
-        opened: block.number,
-        token0: _token0,
-        token1: _token1,
-        closed: 0,
-        batchId: 0,
-        owner: _owner,
-        monitor: _monitor,
-        ownerIndex: tokenIdsPerAddress[_owner].length - 1
+            tokenId: _tokenId,
+            opened: block.number,
+            token0: _token0,
+            token1: _token1,
+            closed: 0,
+            batchId: 0,
+            owner: _owner,
+            ownerIndex: tokenIdsPerAddress[_owner].length - 1,
+            monitor: _monitor
         });
 
         deposits[_tokenId] = newDeposit;
@@ -305,7 +300,7 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
 
     }
 
-    function _claimLimitTrade(uint256 _tokenId) internal {
+    function _claimOrderFunds(uint256 _tokenId) internal {
 
         // TODO give reward
 
@@ -331,7 +326,7 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
         emit DepositClaimed(msg.sender, _tokenId, _tokensToSend0, _tokensToSend1, msg.value);
     }
 
-    function _selectMonitor() internal returns (ILimitTradeMonitor _monitor) {
+    function _selectMonitor() internal returns (IOrderMonitor _monitor) {
 
         uint256 monitorLength = monitors.length;
         require(monitorLength > 0, "NO_MONITORS");
@@ -344,14 +339,14 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
         nextMonitor = _selectedIndex.add(1);
     }
 
-    function _checkBidAskLiquidity(int24 _bidLower, int24 _bidUpper,
+    function _checkLiquidityRange(int24 _bidLower, int24 _bidUpper,
         int24 _askLower, int24 _askUpper,
         uint256 _amount0, uint256 _amount1,
-        IUniswapV3Pool _pool, int24 tickSpacing) internal view
+        IUniswapV3Pool _pool, int24 _tickSpacing) internal view
     returns (int24 _lowerTick, int24 _upperTick) {
 
-        _checkRange(_bidLower, _bidUpper, tickSpacing);
-        _checkRange(_askLower, _askUpper, tickSpacing);
+        _checkRange(_bidLower, _bidUpper, _tickSpacing);
+        _checkRange(_askLower, _askUpper, _tickSpacing);
 
         uint128 bidLiquidity = _liquidityForAmounts(_pool, _bidLower, _bidUpper, _amount0, _amount1);
         uint128 askLiquidity = _liquidityForAmounts(_pool, _askLower, _askUpper, _amount0, _amount1);

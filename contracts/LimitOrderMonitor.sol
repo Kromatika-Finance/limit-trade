@@ -15,11 +15,11 @@ import "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.s
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 
-import "./interfaces/ILimitTradeMonitor.sol";
-import "./interfaces/ILimitTradeManager.sol";
+import "./interfaces/IOrderMonitor.sol";
+import "./interfaces/IOrderManager.sol";
 
-/// @title  LimitTradeMonitor
-contract LimitTradeMonitor is OwnableUpgradeable, ILimitTradeMonitor, KeeperCompatibleInterface {
+/// @title  LimitOrderMonitor
+contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibleInterface {
 
     using SafeMath for uint256;
 
@@ -49,8 +49,8 @@ contract LimitTradeMonitor is OwnableUpgradeable, ILimitTradeMonitor, KeeperComp
     /// @dev tokens to monitor
     uint256[] public tokenIds;
 
-    /// @dev limit trade manager
-    ILimitTradeManager public limitTradeManager;
+    /// @dev order manager
+    IOrderManager public orderManager;
 
     /// @dev uniV3 position manager
     INonfungiblePositionManager public nonfungiblePositionManager;
@@ -81,11 +81,11 @@ contract LimitTradeMonitor is OwnableUpgradeable, ILimitTradeMonitor, KeeperComp
 
     /// @dev only trade manager
     modifier onlyTradeManager() {
-        require(msg.sender == address(limitTradeManager), "NOT_TRADE_MANAGER");
+        require(msg.sender == address(orderManager), "NOT_TRADE_MANAGER");
         _;
     }
 
-    function initialize (ILimitTradeManager _limitTradeManager,
+    function initialize (IOrderManager _orderManager,
         INonfungiblePositionManager _nonfungiblePositionManager,
         IUniswapV3Factory _factory,
         uint256 _batchSize,
@@ -98,7 +98,7 @@ contract LimitTradeMonitor is OwnableUpgradeable, ILimitTradeMonitor, KeeperComp
         require(_monitorSize <= MAX_MONITOR_SIZE, "INVALID_MONITOR_SIZE");
         require(_batchSize <= _monitorSize, "SIZE_MISMATCH");
 
-        limitTradeManager = _limitTradeManager;
+        orderManager = _orderManager;
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
 
@@ -184,7 +184,7 @@ contract LimitTradeMonitor is OwnableUpgradeable, ILimitTradeMonitor, KeeperComp
             _tokenId = _tokenIds[i];
             require(_checkLimitConditions(_tokenId), "INVALID_TRADE");
             _stopMonitor(_tokenId);
-            limitTradeManager.closeLimitTrade(_tokenId, batchCount);
+            orderManager.closeOrder(_tokenId, batchCount);
         }
 
         gasUsed = gasUsed - gasleft();

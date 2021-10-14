@@ -1,4 +1,4 @@
-const LimitTradeManager = artifacts.require("LimitTradeManager");
+const LimitOrderManager = artifacts.require("LimitOrderManager");
 const ERC20 = artifacts.require("ERC20");
 
 const JSBI = require('jsbi');
@@ -52,7 +52,7 @@ module.exports = async(callback) => {
         //     JSBI.BigInt(98659),
         //     JSBI.BigInt(1));
 
-        const tradeInstance = await LimitTradeManager.deployed();
+        const tradeInstance = await LimitOrderManager.deployed();
 
         if (amount0 > 0) {
             await token0Instance.approve(
@@ -80,13 +80,13 @@ module.exports = async(callback) => {
         console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
 
-        const receipt = await tradeInstance.openLimitTrade(
+        const receipt = await tradeInstance.openOrder(
             token0,
             token1,
+            fee,
+            new BN(targetSqrtPriceX96.toString()),
             amount0,
             amount1,
-            new BN(targetSqrtPriceX96.toString()),
-            fee,
             {from: currentAccount}
         );
         console.log('receipt:', receipt);
