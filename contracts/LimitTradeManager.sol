@@ -4,7 +4,7 @@ pragma solidity >=0.7.5;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
@@ -20,7 +20,7 @@ import "./interfaces/ILimitTradeMonitor.sol";
 import "./interfaces/ILimitTradeManager.sol";
 
 /// @title  LimitTradeManager
-contract LimitTradeManager is ILimitTradeManager, Ownable {
+contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
 
     using SafeMath for uint256;
 
@@ -35,9 +35,13 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         ILimitTradeMonitor monitor;
     }
 
+    uint256 private constant FEE_MULTIPLIER = 100000;
+
     event DepositCreated(address indexed owner, uint256 indexed tokenId);
 
     event DepositClosed(address indexed owner, uint256 indexed tokenId);
+
+    event DepositCancelled(address indexed owner, uint256 indexed tokenId);
 
     event DepositClaimed(address indexed owner, uint256 indexed tokenId,
         uint256 tokensOwed0, uint256 tokensOwed1, uint256 payment);
@@ -55,7 +59,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     uint256 public nextMonitor;
 
     /// @dev uniV3 position manager
-    INonfungiblePositionManager public immutable nonfungiblePositionManager;
+    INonfungiblePositionManager public nonfungiblePositionManager;
 
     /// @dev wrapper ETH
     IWETH9 public WETH;
@@ -63,13 +67,26 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     /// @dev univ3 factory
     IUniswapV3Factory public factory;
 
-    constructor(INonfungiblePositionManager _nonfungiblePositionManager,
+    /// @dev service provider address
+    address public serviceProvider;
+
+    /// @dev service fee serviceFee / FEE_MULTIPLIER = x
+    uint256 public serviceFee;
+
+    function initialize(INonfungiblePositionManager _nonfungiblePositionManager,
             IUniswapV3Factory _factory,
-            IWETH9 _WETH) {
+            IWETH9 _WETH,
+            address _serviceProvider,
+            uint256 _serviceFee) external initializer {
 
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
         WETH = _WETH;
+
+        serviceProvider = _serviceProvider;
+        serviceFee = _serviceFee;
+
+        OwnableUpgradeable.__Ownable_init();
     }
 
     function openLimitTrade(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
@@ -124,7 +141,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
     }
 
 
-    function fastCloseLimitTrade(uint256 _tokenId) external
+    function cancelLimitTrade(uint256 _tokenId) external
     returns (uint256 _amount0, uint256 _amount1) {
 
         Deposit storage deposit = deposits[_tokenId];
@@ -142,7 +159,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         // burn the position
         nonfungiblePositionManager.burn(_tokenId);
 
-        emit DepositClosed(deposit.owner, _tokenId);
+        emit DepositCancelled(deposit.owner, _tokenId);
     }
 
     function claimLimitTrade(uint256 _tokenId) external payable {
@@ -155,9 +172,19 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         }
     }
 
-    function addMonitor(ILimitTradeMonitor _newMonitor) external onlyOwner {
-        require(address(_newMonitor) != address(0), "ZERO_ADDRESS");
-        monitors.push(_newMonitor);
+    function setMonitors(ILimitTradeMonitor[] calldata _newMonitors) external onlyOwner {
+        require(_newMonitors.length > 0, "NO_MONITORS");
+        monitors = _newMonitors;
+    }
+
+    function setServiceProvider(address _newServiceProvider) external onlyOwner {
+        require(_newServiceProvider != address(0), "ADDRESS_ZERO");
+        serviceProvider = _newServiceProvider;
+    }
+
+    function setServiceFee(uint256 _serviceFee) external onlyOwner {
+        require(_serviceFee <= FEE_MULTIPLIER, "INVALID_FEE");
+        serviceFee = _serviceFee;
     }
 
     function tokenIdsPerAddressLength(address user) external view returns (uint256) {
@@ -187,7 +214,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
 
     function _claimLimitTrade(uint256 _tokenId) internal {
 
-        // TODO implement minting of governance token proportional to the claiming _tokenId
+        // TODO give reward
 
         Deposit storage deposit = deposits[_tokenId];
         require(deposit.closed > 0, "DEPOSIT_NOT_CLOSED");
@@ -203,9 +230,7 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
 
         require(_tokensToSend0 > 0 || _tokensToSend1 > 0, "NO_TOKENS_OWED");
 
-        // TODO charge service fee
-        // payment = _chargeFee(payment);
-        // if using Chainlink keepers, convert ETH to LINK before sending to the creator
+        payment = _chargeFee(payment);
         TransferHelper.safeTransferETH(creator, payment);
 
         emit DepositClaimed(msg.sender, _tokenId, _tokensToSend0, _tokensToSend1, msg.value);
@@ -296,11 +321,13 @@ contract LimitTradeManager is ILimitTradeManager, Ownable {
         return uint128(x);
     }
 
-//    function _chargeFee(uint256 payment) private returns (uint256) {
-//        uint256 feeDue = payment.mul(serviceFee).div(10**23);
-//        TransferHelper.safeTransferETH(serviceProvider, feeDue);
-//        return payment.sub(feeDue);
-//    }
+    function _chargeFee(uint256 _payment) private returns (uint256) {
+        uint256 _feeDue = _payment.mul(serviceFee).div(FEE_MULTIPLIER);
+        if (_feeDue > 0) {
+            TransferHelper.safeTransferETH(serviceProvider, _feeDue);
+        }
+        return _payment.sub(_feeDue);
+    }
 
     function _mintNewPosition(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
         int24 _lowerTick, int24 _upperTick,

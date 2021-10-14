@@ -1,5 +1,6 @@
 const LimitTradeManager = artifacts.require("LimitTradeManager");
 const LimitTradeMonitor = artifacts.require("LimitTradeMonitor");
+const {deployProxy} = require("@openzeppelin/truffle-upgrades");
 
 module.exports = async function (deployer, network, accounts) {
 
@@ -8,11 +9,11 @@ module.exports = async function (deployer, network, accounts) {
 
   const limitTradeManagerInstance = await LimitTradeManager.deployed();
 
-
-  //_maxBatchSize = 50 _upkeepInterval = 1, _keeperFee = 10 %
-  await deployer.deploy(LimitTradeMonitor,
-      limitTradeManagerInstance.address, positionManager, uniswapFactory, 50, 500, 1, 10000);
+  //_maxBatchSize = 20, monitorSize=500, _upkeepInterval = 1, _keeperFee = 10 %
+  await deployProxy(LimitTradeMonitor,
+      [limitTradeManagerInstance.address, positionManager, uniswapFactory, 20, 500, 1, 10000],
+      {deployer});
 
   const limitTradeMonitorInstance = await LimitTradeMonitor.deployed()
-  await limitTradeManagerInstance.addMonitor(limitTradeMonitorInstance.address);
+  await limitTradeManagerInstance.setMonitors([limitTradeMonitorInstance.address]);
 };

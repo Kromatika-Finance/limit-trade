@@ -10,13 +10,13 @@ module.exports = async(callback) => {
         const currentAccount = accounts[0];
 
         const tradeInstance = await LimitTradeManager.deployed();
-        const tokenId = "140377";
+        const tokenId = "140647";
 
         const depositInfo = await tradeInstance.deposits(tokenId);
         console.log(JSON.stringify(depositInfo));
 
-        const limitSignalInstance = await LimitTradeMonitor.deployed();
-        const batchPayment = await limitSignalInstance.batchInfo(depositInfo.batchId);
+        const limitMonitor = await LimitTradeMonitor.deployed();
+        const batchPayment = await limitMonitor.batchInfo(depositInfo.batchId);
 
         console.log(JSON.stringify(batchPayment));
 

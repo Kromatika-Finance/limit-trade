@@ -10,12 +10,12 @@ module.exports = async(callback) => {
         const accounts = await web3.eth.getAccounts();
         const currentAccount = accounts[0];
 
-        const limitSignalInstance = await LimitTradeMonitor.deployed();
+        const limitMonitor = await LimitTradeMonitor.deployed();
 
-        const receipt = await limitSignalInstance.checkUpkeep.call('0x');
+        const receipt = await limitMonitor.checkUpkeep.call('0x');
         console.log('receipt:', receipt.upkeepNeeded);
         if (receipt.upkeepNeeded) {
-            const performUpkeep = await limitSignalInstance.performUpkeep(receipt.performData);
+            const performUpkeep = await limitMonitor.performUpkeep(receipt.performData);
             console.log('performUpkeep:', performUpkeep);
         }
 

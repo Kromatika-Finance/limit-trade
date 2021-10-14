@@ -10,9 +10,9 @@ module.exports = async(callback) => {
 
         const tradeInstance = await LimitTradeManager.deployed();
 
-        const tokenId = "140377";
+        const tokenId = "140695";
 
-        const receipt = await tradeInstance.fastCloseLimitTrade(
+        const receipt = await tradeInstance.cancelLimitTrade(
             tokenId,
             {from: currentAccount}
         );

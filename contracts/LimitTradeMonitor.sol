@@ -4,7 +4,7 @@ pragma solidity >=0.7.5;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 import "@chainlink/contracts/src/v0.7/interfaces/KeeperCompatibleInterface.sol";
 import "@chainlink/contracts/src/v0.7/interfaces/AggregatorV3Interface.sol";
@@ -19,7 +19,7 @@ import "./interfaces/ILimitTradeMonitor.sol";
 import "./interfaces/ILimitTradeManager.sol";
 
 /// @title  LimitTradeMonitor
-contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInterface {
+contract LimitTradeMonitor is OwnableUpgradeable, ILimitTradeMonitor, KeeperCompatibleInterface {
 
     using SafeMath for uint256;
 
@@ -36,7 +36,7 @@ contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInter
 
     uint256 private constant FEE_MULTIPLIER = 100000;
     uint256 private constant MAX_BATCH_SIZE = 100;
-    uint256 private constant MAX_MONITOR_SIZE = 1000;
+    uint256 private constant MAX_MONITOR_SIZE = 10000;
 
     event BatchClosed(uint256 batchId, uint256 batchSize, uint256 gasUsed, uint256 weiForGas);
 
@@ -53,7 +53,7 @@ contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInter
     ILimitTradeManager public limitTradeManager;
 
     /// @dev uniV3 position manager
-    INonfungiblePositionManager public immutable nonfungiblePositionManager;
+    INonfungiblePositionManager public nonfungiblePositionManager;
 
     /// @dev univ3 factory
     IUniswapV3Factory public factory;
@@ -84,13 +84,13 @@ contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInter
         _;
     }
 
-    constructor(ILimitTradeManager _limitTradeManager,
+    function initialize (ILimitTradeManager _limitTradeManager,
         INonfungiblePositionManager _nonfungiblePositionManager,
         IUniswapV3Factory _factory,
         uint256 _batchSize,
         uint256 _monitorSize,
         uint256 _upkeepInterval,
-        uint256 _keeperFee) {
+        uint256 _keeperFee) external initializer {
 
         require(_keeperFee <= FEE_MULTIPLIER, "INVALID_FEE");
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
@@ -105,6 +105,8 @@ contract LimitTradeMonitor is Ownable, ILimitTradeMonitor, KeeperCompatibleInter
         monitorSize = _monitorSize;
         upkeepInterval = _upkeepInterval;
         keeperFee = _keeperFee;
+
+        OwnableUpgradeable.__Ownable_init();
     }
 
 
