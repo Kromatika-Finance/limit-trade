@@ -278,6 +278,33 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
 
     }
 
+    function _createDeposit(uint256 _tokenId, address _token0, address _token1,
+        uint256 _amount0, uint256 _amount1, address _owner) internal {
+
+        ILimitTradeMonitor _monitor = _selectMonitor();
+        tokenIdsPerAddress[_owner].push(_tokenId);
+
+        // Create a deposit
+        Deposit memory newDeposit = Deposit({
+        tokenId: _tokenId,
+        opened: block.number,
+        token0: _token0,
+        token1: _token1,
+        closed: 0,
+        batchId: 0,
+        owner: _owner,
+        monitor: _monitor,
+        ownerIndex: tokenIdsPerAddress[_owner].length - 1
+        });
+
+        deposits[_tokenId] = newDeposit;
+
+        _monitor.startMonitor(_tokenId, _amount0, _amount1);
+
+        emit DepositCreated(_owner, _tokenId);
+
+    }
+
     function _claimLimitTrade(uint256 _tokenId) internal {
 
         // TODO give reward
@@ -304,43 +331,6 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
         emit DepositClaimed(msg.sender, _tokenId, _tokensToSend0, _tokensToSend1, msg.value);
     }
 
-    function _removeLiquidity(uint256 _tokenId) internal
-        returns (uint256 _amount0, uint256 _amount1) {
-
-        (,,,,,,,uint128 liquidity,,,,) = nonfungiblePositionManager.positions(_tokenId);
-
-        if (liquidity > 0) {
-            (_amount0, _amount1) = _removeLiquidity(_tokenId, liquidity);
-        }
-    }
-
-    function _createDeposit(uint256 _tokenId, address _token0, address _token1,
-        uint256 _amount0, uint256 _amount1, address _owner) internal {
-
-        ILimitTradeMonitor _monitor = _selectMonitor();
-        tokenIdsPerAddress[_owner].push(_tokenId);
-
-        // Create a deposit
-        Deposit memory newDeposit = Deposit({
-            tokenId: _tokenId,
-            opened: block.number,
-            token0: _token0,
-            token1: _token1,
-            closed: 0,
-            batchId: 0,
-            owner: _owner,
-            monitor: _monitor,
-            ownerIndex: tokenIdsPerAddress[_owner].length - 1
-        });
-
-        deposits[_tokenId] = newDeposit;
-
-        _monitor.startMonitor(_tokenId, _amount0, _amount1);
-
-        emit DepositCreated(_owner, _tokenId);
-
-    }
-
     function _selectMonitor() internal returns (ILimitTradeMonitor _monitor) {
 
         uint256 monitorLength = monitors.length;
@@ -351,7 +341,7 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
             : nextMonitor;
 
         _monitor = monitors[_selectedIndex];
-        nextMonitor = _selectedIndex + 1;
+        nextMonitor = _selectedIndex.add(1);
     }
 
     function _checkBidAskLiquidity(int24 _bidLower, int24 _bidUpper,
@@ -440,12 +430,6 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
         return array;
     }
 
-    /// @dev Casts uint256 to uint128 with overflow check.
-    function _toUint128(uint256 x) internal pure returns (uint128) {
-        assert(x <= type(uint128).max);
-        return uint128(x);
-    }
-
     function _chargeFee(uint256 _payment) private returns (uint256) {
         uint256 _feeDue = _payment.mul(serviceFee).div(FEE_MULTIPLIER);
         if (_feeDue > 0) {
@@ -488,11 +472,11 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
 
         // Remove allowance and refund in both assets.
         if (amount0 < _amount0) {
-            _removeAllowanceAndRefund(_token0, _amount0 - amount0, _owner);
+            _removeAllowanceAndRefund(_token0, _amount0.sub(amount0), _owner);
         }
 
         if (amount1 < _amount1) {
-            _removeAllowanceAndRefund(_token1, _amount1 - amount1, _owner);
+            _removeAllowanceAndRefund(_token1, _amount1.sub(amount1), _owner);
         }
     }
 
@@ -519,18 +503,6 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
         _transferToOwner(_token, _amount, _owner);
     }
 
-    function _transferToOwner(address _token, uint256 _amount, address _owner) private {
-        if (_amount > 0) {
-            if (_token == address(WETH)) {
-                // if token is WETH, withdraw and send back ETH
-                WETH.withdraw(_amount);
-                TransferHelper.safeTransferETH(_owner, _amount);
-            } else {
-                TransferHelper.safeTransfer(_token, _owner, _amount);
-            }
-        }
-    }
-
     function _collectTokensOwed(uint256 _tokenId, address _token0, address _token1, address _owner)
     private
     returns (
@@ -553,21 +525,37 @@ contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgrad
         _transferToOwner(_token1, _amount1, _owner);
     }
 
-    function _removeLiquidity(uint256 _tokenId, uint128 _liquidityToRemove)
+    function _transferToOwner(address _token, uint256 _amount, address _owner) private {
+        if (_amount > 0) {
+            if (_token == address(WETH)) {
+                // if token is WETH, withdraw and send back ETH
+                WETH.withdraw(_amount);
+                TransferHelper.safeTransferETH(_owner, _amount);
+            } else {
+                TransferHelper.safeTransfer(_token, _owner, _amount);
+            }
+        }
+    }
+
+    function _removeLiquidity(uint256 _tokenId)
     private
     returns (
         uint256 amount0,
         uint256 amount1
     ) {
+
+        (,,,,,,,uint128 _liquidity,,,,) = nonfungiblePositionManager.positions(_tokenId);
+
         INonfungiblePositionManager.DecreaseLiquidityParams memory params =
             INonfungiblePositionManager.DecreaseLiquidityParams({
                 tokenId: _tokenId,
-                liquidity: _liquidityToRemove,
+                liquidity: _liquidity,
                 amount0Min: 0,
                 amount1Min: 0,
                 deadline: block.timestamp
         });
 
+        // TODO doesnt work with WETH pools
         (amount0, amount1) = nonfungiblePositionManager.decreaseLiquidity(params);
     }
 
