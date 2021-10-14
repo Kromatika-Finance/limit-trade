@@ -76,6 +76,7 @@ contract LimitTradeMonitor is OwnableUpgradeable, ILimitTradeMonitor, KeeperComp
     //  @dev keeper fee keeperFee / FEE_MULTIPLIER = x
     uint256 public keeperFee;
 
+    /// @dev batch info
     mapping(uint256 => BatchInfo) public override batchInfo;
 
     /// @dev only trade manager

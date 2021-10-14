@@ -89,8 +89,34 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
         OwnableUpgradeable.__Ownable_init();
     }
 
+    function openLimitTradeETH(address _token, uint256 _amount,
+        uint160 _targetSqrtPriceX96 , uint24 _fee) external payable returns (uint256 _tokenId) {
+
+        // make sure that _targetSqrtPriceX96 is also calculated according to the sort
+
+        address token0;
+        address token1;
+        uint256 amount0;
+        uint256 amount1;
+
+        address wethAddress = address(WETH);
+        if (wethAddress < _token) {
+            token0 = wethAddress;
+            amount0 = msg.value;
+            token1 = _token;
+            amount1 = _amount;
+        } else {
+            token0 = _token;
+            amount0 = _amount;
+            token1 = wethAddress;
+            amount1 = msg.value;
+        }
+
+        return openLimitTrade(token0, token1, amount0, amount1, _targetSqrtPriceX96, _fee);
+    }
+
     function openLimitTrade(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
-        uint160 _targetSqrtPriceX96 , uint24 _fee) external returns (uint256 _tokenId) {
+        uint160 _targetSqrtPriceX96 , uint24 _fee) public returns (uint256 _tokenId) {
 
         address _poolAddress = factory.getPool(_token0, _token1, _fee);
         require (_poolAddress != address(0), "POOL_NOT_FOUND");
@@ -155,7 +181,9 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
         // remove liquidity
         (_amount0, _amount1) = _removeLiquidity(_tokenId);
         // collect the fees
-        (_amount0, _amount1) = _collectTokensOwed(_tokenId, deposit.owner);
+        (_amount0, _amount1) = _collectTokensOwed(
+            _tokenId, deposit.token0, deposit.token1, deposit.owner
+        );
         // burn the position
         nonfungiblePositionManager.burn(_tokenId);
 
@@ -223,7 +251,9 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
         require(payment <= msg.value, "NO_PAYMENT");
 
         // collect the fees
-        (uint256 _tokensToSend0, uint256 _tokensToSend1) = _collectTokensOwed(_tokenId, deposit.owner);
+        (uint256 _tokensToSend0, uint256 _tokensToSend1) = _collectTokensOwed(
+            _tokenId, deposit.token0, deposit.token1, deposit.owner
+        );
 
         // close the position
         nonfungiblePositionManager.burn(_tokenId);
@@ -376,7 +406,12 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
 
         if (_amount > 0) {
             // transfer tokens to contract
-            TransferHelper.safeTransferFrom(_token, _owner, address(this), _amount);
+            if (_token == address(WETH)) {
+                // if _token is WETH --> wrap it first
+                WETH.deposit{value: _amount}();
+            } else {
+                TransferHelper.safeTransferFrom(_token, _owner, address(this), _amount);
+            }
 
             // Approve the position manager
             TransferHelper.safeApprove(_token, address(nonfungiblePositionManager), _amount);
@@ -386,10 +421,22 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
     /// @dev Remove allowance and refund
     function _removeAllowanceAndRefund(address _token, uint256 _amount, address _owner) private {
         TransferHelper.safeApprove(_token, address(nonfungiblePositionManager), 0);
-        TransferHelper.safeTransfer(_token, _owner, _amount);
+        _transferToOwner(_token, _amount, _owner);
     }
 
-    function _collectTokensOwed(uint256 _tokenId, address _owner)
+    function _transferToOwner(address _token, uint256 _amount, address _owner) private {
+        if (_amount > 0) {
+            if (_token == address(WETH)) {
+                // if token is WETH, withdraw and send back ETH
+                WETH.withdraw(_amount);
+                TransferHelper.safeTransferETH(_owner, _amount);
+            } else {
+                TransferHelper.safeTransfer(_token, _owner, _amount);
+            }
+        }
+    }
+
+    function _collectTokensOwed(uint256 _tokenId, address _token0, address _token1, address _owner)
     private
     returns (
         uint256 _amount0,
@@ -397,15 +444,18 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
     ) {
 
         INonfungiblePositionManager.CollectParams memory params =
-            INonfungiblePositionManager.CollectParams({
-                tokenId: _tokenId,
-                recipient: _owner,
-                amount0Max: type(uint128).max,
-                amount1Max: type(uint128).max
+        INonfungiblePositionManager.CollectParams({
+            tokenId: _tokenId,
+            recipient: address(this),
+            amount0Max: type(uint128).max,
+            amount1Max: type(uint128).max
         });
 
         // collect everything
         (_amount0, _amount1) = nonfungiblePositionManager.collect(params);
+
+        _transferToOwner(_token0, _amount0, _owner);
+        _transferToOwner(_token1, _amount1, _owner);
     }
 
     function _removeLiquidity(uint256 _tokenId, uint128 _liquidityToRemove)

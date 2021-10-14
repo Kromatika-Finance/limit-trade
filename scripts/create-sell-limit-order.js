@@ -17,21 +17,21 @@ module.exports = async(callback) => {
         var BN = web3.utils.BN;
 
         // mainet addresses
-        const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
-        const token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
+        let token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
+        let token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
 
         // kovan addresses
-        // const token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
-        // const token1 = "0x6Ba45c470776fF94568A5802015B8b25965c2CEC"; // XLN
+        // let token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
+        // let token1 = "0x6Ba45c470776fF94568A5802015B8b25965c2CEC"; // XLN
 
-        const token0Instance = await ERC20.at(token0);
-        const token1Instance = await ERC20.at(token1);
+        let token0Instance = await ERC20.at(token0);
+        let token1Instance = await ERC20.at(token1);
+        let token0Decimals = await token0Instance.decimals();
+        let token1Decimals = await token1Instance.decimals();
 
-        const token0Decimals = await token0Instance.decimals();
-        const token1Decimals = await token1Instance.decimals();
-
-        const amount0 = web3.utils.toWei("0.001").toString();
-        const amount1 = 0;
+        let amount0 = new BN((0.001 * 10 ** token0Decimals).toString());
+        let amount1 = new BN((0 * 10 ** token1Decimals).toString());
+        const margin = new BN(5);
 
         // //mainnet
         const fee = 3000;
@@ -40,9 +40,18 @@ module.exports = async(callback) => {
         //const fee = 500;
 
         // // target price: 1 UNI = 25.377 DAI --> sell UNI for DAI MAINNET
+        let sellTokenPrice = "25.377"; // token1 price of token0
+
+        // sort tokens
+        [token0, token1, amount0, amount1, sellTokenPrice] = sortTokens(token0, token1, amount0, amount1, sellTokenPrice);
+        token0Instance = await ERC20.at(token0);
+        token1Instance = await ERC20.at(token1);
+        token0Decimals = (await token0Instance.decimals()).add(margin);
+        token1Decimals = (await token1Instance.decimals()).add(margin);
+        // encode price
         let targetSqrtPriceX96 = encodeSqrtRatioX96(
-            JSBI.BigInt(25377),
-            JSBI.BigInt(1000));
+            JSBI.BigInt(sellTokenPrice * 10 ** token1Decimals),
+            JSBI.BigInt(1 * 10 ** token0Decimals));
 
         // target price: 1 DAI = 100150 XLN --> sell UNI for DAI KOVAN
         // let targetSqrtPriceX96 = encodeSqrtRatioX96(
@@ -50,6 +59,8 @@ module.exports = async(callback) => {
         //     JSBI.BigInt(1));
 
         const tradeInstance = await LimitTradeManager.deployed();
+        token0Instance = await ERC20.at(token0);
+        token1Instance = await ERC20.at(token1);
 
         if (amount0 > 0) {
             await token0Instance.approve(
@@ -94,6 +105,14 @@ module.exports = async(callback) => {
     }
     callback();
 
+    function sortTokens(token0, token1, amount0, amount1, tokenPrice) {
+        if (token0 < token1) {
+            return [token0, token1, amount0, amount1, tokenPrice];
+        } else {
+            // inverse
+            return [token1, token0, amount1, amount0, 1/tokenPrice];
+        }
+    }
 
     function encodeSqrtRatioX96(amount1, amount0) {
         const numerator = JSBI.leftShift(JSBI.BigInt(amount1), JSBI.BigInt(192))

@@ -2,6 +2,7 @@ const LimitTradeManager = artifacts.require("LimitTradeManager");
 const ERC20 = artifacts.require("ERC20");
 
 const JSBI = require('jsbi');
+
 const MAX_SAFE_INTEGER = JSBI.BigInt(Number.MAX_SAFE_INTEGER);
 const ZERO = JSBI.BigInt(0);
 const ONE = JSBI.BigInt(1);
@@ -16,78 +17,76 @@ module.exports = async(callback) => {
         var BN = web3.utils.BN;
 
         // mainet addresses
-        let token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
+        let token0 = process.env.WETH;
         let token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
 
         // kovan addresses
-        // let token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
-        // let token1 = "0x6Ba45c470776fF94568A5802015B8b25965c2CEC"; // XLN
+        // const token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
+        // const token1 = "0x6Ba45c470776fF94568A5802015B8b25965c2CEC"; // XLN
 
         let token0Instance = await ERC20.at(token0);
         let token1Instance = await ERC20.at(token1);
         let token0Decimals = await token0Instance.decimals();
         let token1Decimals = await token1Instance.decimals();
 
-        let amount0 = new BN((0 * 10 ** token0Decimals).toString());
-        let amount1 = new BN((200 * 10 ** token1Decimals).toString());
-        const fee = 3000;
+        let amount0 = new BN((0.001 * 10 ** token0Decimals).toString());
+        let amount1 = new BN((0 * 10 ** token1Decimals).toString());
         const margin = new BN(5);
 
-        // target price: 1 UNI = 23.5104 DAI --> buy UNI for DAI
-        let buyTokenPrice = "23.510"; // token1 price of token0
+        // //mainnet
+        const fee = 3000;
+
+        //kovan
+        //const fee = 500;
+
+        // // target price: 1 ETH = 3800 DAI --> sell ETH for DAI MAINNET
+        let sellTokenPrice = "3800"; // token1 price of token0
 
         // sort tokens
-        [token0, token1, amount0, amount1, buyTokenPrice] = sortTokens(token0, token1, amount0, amount1, buyTokenPrice);
+        [token0, token1, amount0, amount1, sellTokenPrice] = sortTokens(token0, token1, amount0, amount1, sellTokenPrice);
         token0Instance = await ERC20.at(token0);
         token1Instance = await ERC20.at(token1);
         token0Decimals = (await token0Instance.decimals()).add(margin);
         token1Decimals = (await token1Instance.decimals()).add(margin);
         // encode price
+        console.log(sellTokenPrice);
+        console.log(token1Decimals.toString());
         let targetSqrtPriceX96 = encodeSqrtRatioX96(
-            JSBI.BigInt(buyTokenPrice * 10 ** token1Decimals),
+            JSBI.BigInt(sellTokenPrice * 10 ** token1Decimals),
             JSBI.BigInt(1 * 10 ** token0Decimals));
 
-        // target price: 1 DAI = 98750.8 XLN --> buy XLN with DAI
+        // target price: 1 DAI = 100150 XLN --> sell UNI for DAI KOVAN
         // let targetSqrtPriceX96 = encodeSqrtRatioX96(
-        //     JSBI.BigInt(98659),
+        //     JSBI.BigInt(100150),
         //     JSBI.BigInt(1));
 
         const tradeInstance = await LimitTradeManager.deployed();
 
-        if (amount0 > 0) {
-            await token0Instance.approve(
-                tradeInstance.address,
-                amount0,
-                {from: currentAccount}
-                );
-
-            console.log((await token0Instance.allowance(currentAccount, tradeInstance.address)).toString());
+        let value;
+        let token;
+        let amount;
+        if (token0 == process.env.WETH) {
+            value = amount0;
+            token = token1;
+            amount = amount1;
+        } else {
+            value = amount1;
+            token = token0;
+            amount = amount0;
         }
 
-        if (amount1 > 0) {
-            await token1Instance.approve(
-                tradeInstance.address,
-                amount1,
-                {from: currentAccount}
-            );
-            console.log((await token1Instance.allowance(currentAccount, tradeInstance.address)).toString());
-        }
-
-        console.log("Token0 --> " + token0.toString());
-        console.log("Token1 --> " + token1.toString());
-        console.log("Amount0 --> " + amount0.toString());
-        console.log("Amount1 --> " + amount1.toString());
+        console.log("Token1 --> " + token.toString());
+        console.log("Amount0 --> " + value.toString());
+        console.log("Amount1 --> " + amount.toString());
         console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
 
-        const receipt = await tradeInstance.openLimitTrade(
-            token0,
-            token1,
-            amount0,
-            amount1,
+        const receipt = await tradeInstance.openLimitTradeETH(
+            token,
+            amount,
             new BN(targetSqrtPriceX96.toString()),
             fee,
-            {from: currentAccount}
+            {value: value, from: currentAccount}
         );
         console.log('receipt:', receipt);
 
