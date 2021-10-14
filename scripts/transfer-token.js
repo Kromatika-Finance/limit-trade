@@ -1,7 +1,9 @@
 const LimitTradeManager = artifacts.require("LimitTradeManager");
-const IERC20 = artifacts.require("IERC20");
+const IERC721 = artifacts.require("IERC721");
 
 module.exports = async(callback) => {
+
+    const positionManager = process.env.UNISWAP_POSITION_MANAGER;
 
     try {
 
@@ -9,10 +11,13 @@ module.exports = async(callback) => {
         const currentAccount = accounts[0];
 
         const tradeInstance = await LimitTradeManager.deployed();
+        const tokenInstance = await IERC721.at(positionManager);
 
         const tokenId = "140788";
 
-        const receipt = await tradeInstance.cancelLimitTrade(
+        const receipt = await tokenInstance.safeTransferFrom(
+            currentAccount,
+            tradeInstance.address,
             tokenId,
             {from: currentAccount}
         );

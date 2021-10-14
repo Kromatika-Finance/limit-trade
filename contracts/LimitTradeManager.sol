@@ -5,6 +5,7 @@ pragma abicoder v2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import '@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol';
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
@@ -20,7 +21,7 @@ import "./interfaces/ILimitTradeMonitor.sol";
 import "./interfaces/ILimitTradeManager.sol";
 
 /// @title  LimitTradeManager
-contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
+contract LimitTradeManager is ILimitTradeManager, IERC721Receiver, OwnableUpgradeable {
 
     using SafeMath for uint256;
 
@@ -33,6 +34,7 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
         uint256 batchId;
         address owner;
         ILimitTradeMonitor monitor;
+        uint256 ownerIndex;
     }
 
     uint256 private constant FEE_MULTIPLIER = 100000;
@@ -128,26 +130,7 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
             _token0, _token1, _amount0, _amount1, _lowerTick, _upperTick, _fee, msg.sender
         );
 
-        ILimitTradeMonitor _monitor = _selectMonitor();
-
-        // Create a deposit
-        Deposit memory newDeposit = Deposit({
-            tokenId: _tokenId,
-            opened: block.number,
-            token0: _token0,
-            token1: _token1,
-            closed: 0,
-            batchId: 0,
-            owner: msg.sender,
-            monitor: _monitor
-        });
-
-        deposits[_tokenId] = newDeposit;
-        tokenIdsPerAddress[msg.sender].push(_tokenId);
-
-        _monitor.startMonitor(_tokenId, _amount0, _amount1);
-
-        emit DepositCreated(msg.sender, _tokenId);
+        _createDeposit(_tokenId, _token0, _token1, _amount0, _amount1, msg.sender);
     }
 
     function closeLimitTrade(uint256 _tokenId, uint256 _batchId) external override
@@ -198,6 +181,61 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
         for (uint256 i = 0; i < tokenIds.length; i++) {
             _claimLimitTrade(tokenIds[i]);
         }
+    }
+
+    function retrieveToken(uint256 _tokenId) external {
+
+        Deposit storage deposit = deposits[_tokenId];
+
+        // must be the owner of the deposit
+        require(msg.sender == deposit.owner, 'NOT_OWNER');
+        // transfer ownership to original owner
+        nonfungiblePositionManager.safeTransferFrom(address(this), msg.sender, _tokenId);
+        // stop monitoring
+        deposit.monitor.stopMonitor(_tokenId);
+
+        // remove information related to tokenId
+        tokenIdsPerAddress[msg.sender] = removeElementFromArray(
+            deposit.ownerIndex, tokenIdsPerAddress[msg.sender]
+        );
+        delete deposits[_tokenId];
+    }
+
+    // Implementing `onERC721Received` so this contract can receive custody of erc721 tokens
+    function onERC721Received(
+        address _operator,
+        address,
+        uint256 _tokenId,
+        bytes calldata
+    ) external override returns (bytes4) {
+
+        uint256 _amount0;
+        uint256 _amount1;
+        address _token0;
+        address _token1;
+
+        {
+
+            (, , address _t0, address _t1, uint24 _fee , int24 tickLower , int24 tickUpper , uint128 liquidity , , , , ) =
+            nonfungiblePositionManager.positions(_tokenId);
+
+            _token0 = _t0;
+            _token1 = _t1;
+
+            address _poolAddress = factory.getPool(_token0, _token1, _fee);
+            require (_poolAddress != address(0), "POOL_NOT_FOUND");
+
+            (_amount0, _amount1) = _amountsForLiquidity(IUniswapV3Pool(_poolAddress),
+                tickLower, tickUpper, liquidity);
+        }
+
+        // only transfer custody of one-sided range liquidity
+        require(_amount0 == 0 || _amount1 == 0, "INVALID_TOKEN");
+
+        // create a deposit for the operator
+        _createDeposit(_tokenId, _token0, _token1, _amount0, _amount1, _operator);
+
+        return this.onERC721Received.selector;
     }
 
     function setMonitors(ILimitTradeMonitor[] calldata _newMonitors) external onlyOwner {
@@ -276,6 +314,33 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
         }
     }
 
+    function _createDeposit(uint256 _tokenId, address _token0, address _token1,
+        uint256 _amount0, uint256 _amount1, address _owner) internal {
+
+        ILimitTradeMonitor _monitor = _selectMonitor();
+        tokenIdsPerAddress[_owner].push(_tokenId);
+
+        // Create a deposit
+        Deposit memory newDeposit = Deposit({
+            tokenId: _tokenId,
+            opened: block.number,
+            token0: _token0,
+            token1: _token1,
+            closed: 0,
+            batchId: 0,
+            owner: _owner,
+            monitor: _monitor,
+            ownerIndex: tokenIdsPerAddress[_owner].length - 1
+        });
+
+        deposits[_tokenId] = newDeposit;
+
+        _monitor.startMonitor(_tokenId, _amount0, _amount1);
+
+        emit DepositCreated(_owner, _tokenId);
+
+    }
+
     function _selectMonitor() internal returns (ILimitTradeMonitor _monitor) {
 
         uint256 monitorLength = monitors.length;
@@ -329,6 +394,23 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
         );
     }
 
+    /// @dev Wrapper around `LiquidityAmounts.getAmountsForLiquidity()`.
+    function _amountsForLiquidity(
+        IUniswapV3Pool pool,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity
+    ) internal view returns (uint256, uint256) {
+        (uint160 sqrtRatioX96, , , , , , ) = pool.slot0();
+        return
+        LiquidityAmounts.getAmountsForLiquidity(
+            sqrtRatioX96,
+            TickMath.getSqrtRatioAtTick(tickLower),
+            TickMath.getSqrtRatioAtTick(tickUpper),
+            liquidity
+        );
+    }
+
     function _checkRange(int24 _tickLower, int24 _tickUpper, int24 _tickSpacing) internal pure {
         require(_tickLower < _tickUpper, "tickLower < tickUpper");
         require(_tickLower >= TickMath.MIN_TICK, "tickLower too low");
@@ -343,6 +425,19 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
         int24 compressed = tick / _tickSpacing;
         if (tick < 0 && tick % _tickSpacing != 0) compressed--;
         return compressed * _tickSpacing;
+    }
+
+    /// @notice Removes index element from the given array.
+    /// @param  index index to remove from the array
+    /// @param  array the array itself
+    function removeElementFromArray(uint256 index, uint256[] storage array) private returns (uint256[] memory) {
+        if (index == array.length - 1) {
+            array.pop();
+        } else {
+            array[index] = array[array.length - 1];
+            array.pop();
+        }
+        return array;
     }
 
     /// @dev Casts uint256 to uint128 with overflow check.
@@ -475,4 +570,10 @@ contract LimitTradeManager is ILimitTradeManager, OwnableUpgradeable {
 
         (amount0, amount1) = nonfungiblePositionManager.decreaseLiquidity(params);
     }
+
+    // Function to receive Ether. msg.data must be empty
+    receive() external payable {}
+
+    // Fallback function is called when msg.data is not empty
+    fallback() external payable {}
 }

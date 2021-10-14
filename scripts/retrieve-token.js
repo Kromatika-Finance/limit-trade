@@ -12,7 +12,7 @@ module.exports = async(callback) => {
 
         const tokenId = "140788";
 
-        const receipt = await tradeInstance.cancelLimitTrade(
+        const receipt = await tradeInstance.retrieveToken(
             tokenId,
             {from: currentAccount}
         );
