@@ -39,6 +39,8 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
 
     uint256 private constant FEE_MULTIPLIER = 100000;
 
+    uint256 private constant LIQUIDITY_DEADLINE = 60 seconds;
+
     event DepositCreated(address indexed owner, uint256 indexed tokenId);
 
     event DepositClosed(address indexed owner, uint256 indexed tokenId);
@@ -160,16 +162,13 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
 
         // update the state
         deposit.closed = block.number;
-        deposit.monitor.stopMonitor(_tokenId);
 
         // remove liquidity
         (_amount0, _amount1) = _removeLiquidity(_tokenId);
-        // collect the fees
-        (_amount0, _amount1) = _collectTokensOwed(
-            _tokenId, deposit.token0, deposit.token1, deposit.owner
-        );
-        // burn the position
-        nonfungiblePositionManager.burn(_tokenId);
+        // stop monitor
+        deposit.monitor.stopMonitor(_tokenId);
+        // claim the funds
+        _claimOrderFunds(_tokenId);
 
         emit DepositCancelled(deposit.owner, _tokenId);
     }
@@ -184,6 +183,8 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
 
         // must be the owner of the deposit
         require(msg.sender == deposit.owner, 'NOT_OWNER');
+        // must not be closed
+        require(deposit.closed == 0, "DEPOSIT_CLOSED");
         // transfer ownership to original owner
         nonfungiblePositionManager.safeTransferFrom(address(this), msg.sender, _tokenId);
         // stop monitoring
@@ -310,18 +311,26 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
         (uint256 payment, address creator) = deposit.monitor.batchInfo(deposit.batchId);
         require(payment <= msg.value, "NO_PAYMENT");
 
-        // collect the fees
-        (uint256 _tokensToSend0, uint256 _tokensToSend1) = _collectTokensOwed(
-            _tokenId, deposit.token0, deposit.token1, deposit.owner
-        );
+        INonfungiblePositionManager.CollectParams memory collectParams =
+        INonfungiblePositionManager.CollectParams({
+            tokenId: _tokenId,
+            recipient: address(this),
+            amount0Max: type(uint128).max,
+            amount1Max: type(uint128).max
+        });
 
-        // close the position
-        nonfungiblePositionManager.burn(_tokenId);
-
+        // collect everything
+        (uint256 _tokensToSend0, uint256 _tokensToSend1) = nonfungiblePositionManager.collect(collectParams);
         require(_tokensToSend0 > 0 || _tokensToSend1 > 0, "NO_TOKENS_OWED");
 
         payment = _chargeFee(payment);
         TransferHelper.safeTransferETH(creator, payment);
+
+        // close the position
+        nonfungiblePositionManager.burn(_tokenId);
+
+        _transferToOwner(deposit.token0, _tokensToSend0, deposit.owner);
+        _transferToOwner(deposit.token1, _tokensToSend1, deposit.owner);
 
         emit DepositClaimed(msg.sender, _tokenId, _tokensToSend0, _tokensToSend1, msg.value);
     }
@@ -448,7 +457,7 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
         _approveAndTransferToUniswap(_token0, _amount0, _owner);
         _approveAndTransferToUniswap(_token1, _amount1, _owner);
 
-        INonfungiblePositionManager.MintParams memory params =
+        INonfungiblePositionManager.MintParams memory mintParams =
         INonfungiblePositionManager.MintParams({
             token0: _token0,
             token1: _token1,
@@ -460,10 +469,10 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
             amount0Min: 0,
             amount1Min: 0,
             recipient: address(this),
-            deadline: block.timestamp
+            deadline: block.timestamp.add(LIQUIDITY_DEADLINE)
         });
 
-        (tokenId,liquidity,amount0,amount1) = nonfungiblePositionManager.mint(params);
+        (tokenId,liquidity,amount0,amount1) = nonfungiblePositionManager.mint(mintParams);
 
         // Remove allowance and refund in both assets.
         if (amount0 < _amount0) {
@@ -498,28 +507,6 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
         _transferToOwner(_token, _amount, _owner);
     }
 
-    function _collectTokensOwed(uint256 _tokenId, address _token0, address _token1, address _owner)
-    private
-    returns (
-        uint256 _amount0,
-        uint256 _amount1
-    ) {
-
-        INonfungiblePositionManager.CollectParams memory params =
-        INonfungiblePositionManager.CollectParams({
-            tokenId: _tokenId,
-            recipient: address(this),
-            amount0Max: type(uint128).max,
-            amount1Max: type(uint128).max
-        });
-
-        // collect everything
-        (_amount0, _amount1) = nonfungiblePositionManager.collect(params);
-
-        _transferToOwner(_token0, _amount0, _owner);
-        _transferToOwner(_token1, _amount1, _owner);
-    }
-
     function _transferToOwner(address _token, uint256 _amount, address _owner) private {
         if (_amount > 0) {
             if (_token == address(WETH)) {
@@ -533,7 +520,7 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
     }
 
     function _removeLiquidity(uint256 _tokenId)
-    private
+    internal
     returns (
         uint256 amount0,
         uint256 amount1
@@ -541,17 +528,17 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
 
         (,,,,,,,uint128 _liquidity,,,,) = nonfungiblePositionManager.positions(_tokenId);
 
-        INonfungiblePositionManager.DecreaseLiquidityParams memory params =
+        INonfungiblePositionManager.DecreaseLiquidityParams memory removeParams =
             INonfungiblePositionManager.DecreaseLiquidityParams({
                 tokenId: _tokenId,
                 liquidity: _liquidity,
                 amount0Min: 0,
                 amount1Min: 0,
-                deadline: block.timestamp
+                deadline: block.timestamp.add(LIQUIDITY_DEADLINE)
         });
 
         // TODO doesnt work with WETH pools
-        (amount0, amount1) = nonfungiblePositionManager.decreaseLiquidity(params);
+        (amount0, amount1) = nonfungiblePositionManager.decreaseLiquidity(removeParams);
     }
 
     // Function to receive Ether. msg.data must be empty
