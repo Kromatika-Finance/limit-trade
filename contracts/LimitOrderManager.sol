@@ -153,7 +153,7 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
     }
 
 
-    function cancelOrder(uint256 _tokenId) external
+    function cancelOrder(uint256 _tokenId) external payable
     returns (uint256 _amount0, uint256 _amount1) {
 
         Deposit storage deposit = deposits[_tokenId];
@@ -235,16 +235,19 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
     }
 
     function setMonitors(IOrderMonitor[] calldata _newMonitors) external onlyOwner {
+
         require(_newMonitors.length > 0, "NO_MONITORS");
         monitors = _newMonitors;
     }
 
     function setServiceProvider(address _newServiceProvider) external onlyOwner {
+
         require(_newServiceProvider != address(0), "ADDRESS_ZERO");
         serviceProvider = _newServiceProvider;
     }
 
     function setServiceFee(uint256 _serviceFee) external onlyOwner {
+
         require(_serviceFee <= FEE_MULTIPLIER, "INVALID_FEE");
         serviceFee = _serviceFee;
     }
@@ -503,6 +506,7 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
 
     /// @dev Remove allowance and refund
     function _removeAllowanceAndRefund(address _token, uint256 _amount, address _owner) private {
+
         TransferHelper.safeApprove(_token, address(nonfungiblePositionManager), 0);
         _transferToOwner(_token, _amount, _owner);
     }
@@ -537,7 +541,6 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
                 deadline: block.timestamp.add(LIQUIDITY_DEADLINE)
         });
 
-        // TODO doesnt work with WETH pools
         (amount0, amount1) = nonfungiblePositionManager.decreaseLiquidity(removeParams);
     }
 
