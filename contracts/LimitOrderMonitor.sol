@@ -27,6 +27,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         uint256 tokenId;
         uint256 tokensDeposit0;
         uint256 tokensDeposit1;
+        uint256 targetGasPrice;
     }
 
     struct BatchInfo {
@@ -109,24 +110,29 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
 
         OwnableUpgradeable.__Ownable_init();
     }
-
-
+    
     function startMonitor(
-        uint256 _tokenId, uint256 _amount0, uint256 _amount1
+        uint256 _tokenId, uint256 _amount0, uint256 _amount1, uint256 _targetGasPrice
     ) external override onlyTradeManager {
 
-        require(tokenIds.length < monitorSize, "MONITOR_FULL");
+        Deposit storage deposit = depositPerTokenId[_tokenId];
 
-        if (depositPerTokenId[_tokenId].tokenId == 0) {
+        if (deposit.tokenId == 0) {
+            require(tokenIds.length < monitorSize, "MONITOR_FULL");
+
             Deposit memory newDeposit = Deposit({
                 tokenId: _tokenId,
                 tokensDeposit0: _amount0,
-                tokensDeposit1: _amount1
+                tokensDeposit1: _amount1,
+                targetGasPrice: _targetGasPrice
             });
 
             depositPerTokenId[_tokenId] = newDeposit;
             tokenIds.push(_tokenId);
             tokenIndexPerTokenId[_tokenId] = tokenIds.length;
+        } else {
+            // update _targetGasPrice
+            deposit.targetGasPrice = _targetGasPrice;
         }
     }
 
@@ -200,6 +206,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     }
 
     function setBatchSize(uint256 _batchSize) external onlyOwner {
+
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
         require(_batchSize <= monitorSize, "SIZE_MISMATCH");
 
@@ -207,6 +214,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     }
 
     function setMonitorSize(uint256 _monitorSize) external onlyOwner {
+
         require(_monitorSize <= MAX_MONITOR_SIZE, "INVALID_MONITOR_SIZE");
         require(_monitorSize >= batchSize, "SIZE_MISMATCH");
 
@@ -214,10 +222,12 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     }
 
     function setUpkeepInterval(uint256 _upkeepInterval) external onlyOwner {
+
         upkeepInterval = _upkeepInterval;
     }
 
     function setKeeperFee(uint256 _keeperFee) external onlyOwner {
+
         require(_keeperFee <= FEE_MULTIPLIER, "INVALID_FEE");
         keeperFee = _keeperFee;
     }
@@ -243,6 +253,13 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     function _checkLimitConditions(uint256 _tokenId) internal view
         returns (bool) {
 
+        // compare the actual liquidity vs deposit liquidity
+        Deposit storage deposit = depositPerTokenId[_tokenId];
+        // if current gas price is higher --> quit
+        if (tx.gasprice > deposit.targetGasPrice) {
+            return false;
+        }
+
         // get the position;
         (,,address _token0,address _token1,uint24 _fee,int24 tickLower,int24 tickUpper,uint128 liquidity,,,,) =
         nonfungiblePositionManager.positions(_tokenId);
@@ -251,9 +268,6 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         (uint256 amount0, uint256 amount1) = _amountsForLiquidity(
             IUniswapV3Pool(_poolAddress), tickLower, tickUpper, liquidity
         );
-
-        // compare the actual liquidity vs deposit liquidity
-        Deposit storage deposit = depositPerTokenId[_tokenId];
 
         if (deposit.tokensDeposit0 == 0 && amount0 > 0
             && deposit.tokensDeposit1 > 0 && amount1 == 0) {

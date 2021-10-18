@@ -8,6 +8,6 @@ module.exports = async function (deployer, network, accounts) {
   const uniswapFactory = process.env.UNISWAP_FACTORY;
 
   await deployProxy(LimitOrderManager,
-      [positionManager, uniswapFactory, wrappedETHAddress, accounts[0], 0],
+      [positionManager, uniswapFactory, wrappedETHAddress, accounts[0], 0, 200000],
       {deployer});
 };
