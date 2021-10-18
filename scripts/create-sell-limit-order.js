@@ -40,7 +40,9 @@ module.exports = async(callback) => {
         //const fee = 500;
 
         // // target price: 1 UNI = 25.377 DAI --> sell UNI for DAI MAINNET
-        let sellTokenPrice = "25.377"; // token1 price of token0
+        let sellTokenPrice = "31.377"; // token1 price of token0
+
+        let targetGasPrice = web3.utils.toWei("50", "gwei");
 
         // sort tokens
         [token0, token1, amount0, amount1, sellTokenPrice] = sortTokens(token0, token1, amount0, amount1, sellTokenPrice);
@@ -82,12 +84,17 @@ module.exports = async(callback) => {
             console.log((await token1Instance.allowance(currentAccount, tradeInstance.address)).toString());
         }
 
+        // calculate the monitoring deposit
+        const monitorGasUsage = await tradeInstance.monitorGasUsage();
+        const msgValue = targetGasPrice * monitorGasUsage;
+
         console.log("Token0 --> " + token0.toString());
         console.log("Token1 --> " + token1.toString());
         console.log("Amount0 --> " + amount0.toString());
         console.log("Amount1 --> " + amount1.toString());
         console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
+        console.log("Deposit --> " +  msgValue.toString());
 
         const receipt = await tradeInstance.openOrder(
             token0,
@@ -96,7 +103,8 @@ module.exports = async(callback) => {
             new BN(targetSqrtPriceX96.toString()),
             amount0,
             amount1,
-            {from: currentAccount}
+            targetGasPrice,
+            {value: msgValue, from: currentAccount}
         );
         console.log('receipt:', receipt);
 

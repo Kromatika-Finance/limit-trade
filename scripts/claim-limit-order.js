@@ -10,7 +10,7 @@ module.exports = async(callback) => {
         const currentAccount = accounts[0];
 
         const tradeInstance = await LimitOrderManager.deployed();
-        const tokenId = "140647";
+        const tokenId = "142674";
 
         const depositInfo = await tradeInstance.deposits(tokenId);
         console.log(JSON.stringify(depositInfo));
@@ -23,7 +23,7 @@ module.exports = async(callback) => {
         //claim funds
         const receipt = await tradeInstance.claimOrderFunds(
             tokenId,
-            {value: batchPayment.payment, from: currentAccount}
+            {from: currentAccount}
         );
         console.log('receipt:', receipt);
 

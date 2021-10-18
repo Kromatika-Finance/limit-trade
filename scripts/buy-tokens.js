@@ -4,7 +4,7 @@ const IERC20 = artifacts.require("IERC20");
 module.exports = async(callback) => {
 
     const token0 = process.env.WETH;
-    const token1 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
+    const token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; //UNI
 
     // const token0 = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"; //WETH
     // const token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI

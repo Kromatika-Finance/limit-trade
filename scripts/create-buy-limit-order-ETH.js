@@ -42,6 +42,8 @@ module.exports = async(callback) => {
         // // target price: 1 ETH = 3500 DAI --> buy ETH for DAI MAINNET
         let buyTokenPrice = "3500"; // token1 price of token0
 
+        let targetGasPrice = web3.utils.toWei("50", "gwei");
+
         // sort tokens
         [token0, token1, amount0, amount1, buyTokenPrice] = sortTokens(token0, token1, amount0, amount1, buyTokenPrice);
         token0Instance = await ERC20.at(token0);
@@ -80,17 +82,23 @@ module.exports = async(callback) => {
             {from: currentAccount}
         );
 
+        const monitorGasUsage = await tradeInstance.monitorGasUsage();
+        const msgValue = targetGasPrice * monitorGasUsage;
+
         console.log("Token --> " + token.toString());
         console.log("Amount --> " + amount.toString());
         console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
+        console.log("Deposit --> " +  msgValue.toString());
 
         const receipt = await tradeInstance.openOrderETH(
             token,
             fee,
             new BN(targetSqrtPriceX96.toString()),
+            0,
             amount,
-            {from: currentAccount}
+            targetGasPrice,
+            {value: msgValue, from: currentAccount}
         );
         console.log('receipt:', receipt);
 

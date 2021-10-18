@@ -18,7 +18,7 @@ module.exports = async(callback) => {
 
         // mainet addresses
         let token0 = process.env.WETH;
-        let token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
+        let token1 = "0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9"; // DAI
 
         // kovan addresses
         // const token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
@@ -42,6 +42,8 @@ module.exports = async(callback) => {
         // // target price: 1 ETH = 3800 DAI --> sell ETH for DAI MAINNET
         let sellTokenPrice = "3800"; // token1 price of token0
 
+        let targetGasPrice = web3.utils.toWei("50", "gwei");
+
         // sort tokens
         [token0, token1, amount0, amount1, sellTokenPrice] = sortTokens(token0, token1, amount0, amount1, sellTokenPrice);
         token0Instance = await ERC20.at(token0);
@@ -54,11 +56,6 @@ module.exports = async(callback) => {
         let targetSqrtPriceX96 = encodeSqrtRatioX96(
             JSBI.BigInt(sellTokenPrice * 10 ** token1Decimals),
             JSBI.BigInt(1 * 10 ** token0Decimals));
-
-        // target price: 1 DAI = 100150 XLN --> sell UNI for DAI KOVAN
-        // let targetSqrtPriceX96 = encodeSqrtRatioX96(
-        //     JSBI.BigInt(100150),
-        //     JSBI.BigInt(1));
 
         const tradeInstance = await LimitOrderManager.deployed();
 
@@ -75,18 +72,25 @@ module.exports = async(callback) => {
             amount = amount0;
         }
 
+        // calculate the monitoring deposit
+        const monitorGasUsage = await tradeInstance.monitorGasUsage();
+        const msgValue = targetGasPrice * monitorGasUsage;
+
         console.log("Token1 --> " + token.toString());
         console.log("Amount0 --> " + value.toString());
         console.log("Amount1 --> " + amount.toString());
         console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
+        console.log("Deposit --> " +  msgValue.toString());
 
         const receipt = await tradeInstance.openOrderETH(
             token,
             fee,
             new BN(targetSqrtPriceX96.toString()),
+            value,
             amount,
-            {value: value, from: currentAccount}
+            targetGasPrice,
+            {value: value.add(new BN(msgValue)), from: currentAccount}
         );
         console.log('receipt:', receipt);
 
