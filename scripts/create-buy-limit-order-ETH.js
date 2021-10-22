@@ -18,7 +18,7 @@ module.exports = async(callback) => {
 
         // mainet addresses
         let token0 = process.env.WETH;
-        let token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
+        let token1 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
 
         // kovan addresses
         // const token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
@@ -40,9 +40,9 @@ module.exports = async(callback) => {
         //const fee = 500;
 
         // // target price: 1 ETH = 3500 DAI --> buy ETH for DAI MAINNET
-        let buyTokenPrice = "3500"; // token1 price of token0
+        let buyTokenPrice = "3000"; // token1 price of token0
 
-        let targetGasPrice = web3.utils.toWei("50", "gwei");
+        let targetGasPrice = web3.utils.toWei("1", "gwei");
 
         // sort tokens
         [token0, token1, amount0, amount1, buyTokenPrice] = sortTokens(token0, token1, amount0, amount1, buyTokenPrice);
@@ -64,14 +64,26 @@ module.exports = async(callback) => {
 
         const tradeInstance = await LimitOrderManager.deployed();
 
-        let token;
-        let amount;
-        if (token0 == process.env.WETH) {
-            token = token1;
-            amount = amount1;
+        [token0, token1, amount0, amount1, buyTokenPrice] = sortTokens(token0, token1, amount0, amount1, buyTokenPrice);
+
+        const monitorGasUsage = await tradeInstance.monitorGasUsage();
+
+        let msgValue = targetGasPrice * monitorGasUsage;
+        if (token0 == process.env.WETH && amount0 > 0) {
+            msgValue = amount0.add(new BN(msgValue.toString()))
+        }
+        if (token1 == process.env.WETH && amount1 > 0) {
+            msgValue = amount1.add(new BN(msgValue.toString()))
+        }
+
+        let token
+        let amount
+        if (token0 != process.env.WETH) {
+            token = token0
+            amount = amount0
         } else {
-            token = token0;
-            amount = amount0;
+            token = token1
+            amount = amount1
         }
 
         // approve spending of token&amount
@@ -82,21 +94,21 @@ module.exports = async(callback) => {
             {from: currentAccount}
         );
 
-        const monitorGasUsage = await tradeInstance.monitorGasUsage();
-        const msgValue = targetGasPrice * monitorGasUsage;
-
-        console.log("Token --> " + token.toString());
-        console.log("Amount --> " + amount.toString());
+        console.log("Token0 --> " + token0.toString());
+        console.log("Token1 --> " + token1.toString());
+        console.log("Amount0 --> " + amount0.toString());
+        console.log("Amount1 --> " + amount1.toString());
         console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
         console.log("Deposit --> " +  msgValue.toString());
 
-        const receipt = await tradeInstance.openOrderETH(
-            token,
+        const receipt = await tradeInstance.openOrder(
+            token0,
+            token1,
             fee,
             new BN(targetSqrtPriceX96.toString()),
-            0,
-            amount,
+            amount0,
+            amount1,
             targetGasPrice,
             {value: msgValue, from: currentAccount}
         );

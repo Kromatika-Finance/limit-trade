@@ -19,9 +19,16 @@ import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 
 import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
+import "./SelfPermit.sol";
+import "./Multicall.sol";
 
 /// @title  LimitOrderManager
-contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable {
+contract LimitOrderManager is
+    IOrderManager,
+    IERC721Receiver,
+    OwnableUpgradeable,
+    Multicall,
+    SelfPermit {
 
     using SafeMath for uint256;
 
@@ -38,16 +45,22 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
         uint256 gasDeposit;
     }
 
+    /// @dev fee multiplier
     uint256 private constant FEE_MULTIPLIER = 100000;
 
+    /// @dev liquidity deadline
     uint256 private constant LIQUIDITY_DEADLINE = 60 seconds;
 
+    /// @dev fired when a new deposit is made
     event DepositCreated(address indexed owner, uint256 indexed tokenId);
 
+    /// @dev fired when a deposit is closed
     event DepositClosed(address indexed owner, uint256 indexed tokenId);
 
+    /// @dev fired when a deposit is cancelled
     event DepositCancelled(address indexed owner, uint256 indexed tokenId);
 
+    /// @dev fired when a deposit is claimed
     event DepositClaimed(address indexed owner, uint256 indexed tokenId,
         uint256 tokensOwed0, uint256 tokensOwed1, uint256 payment);
 
@@ -81,6 +94,13 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
     /// @dev order monitoring gas usage
     uint256 public monitorGasUsage;
 
+    /// @notice Initializes the smart contract instead of a constructor
+    /// @param _nonfungiblePositionManager univ3 nftmanager
+    /// @param _factory univ3 factory
+    /// @param _WETH wrapped ETH
+    /// @param _serviceProvider service provider address
+    /// @param _serviceFee fee charged for providing services
+    /// @param _monitorGasUsage gas usage of the order monitor
     function initialize(INonfungiblePositionManager _nonfungiblePositionManager,
             IUniswapV3Factory _factory,
             IWETH9 _WETH,
@@ -99,47 +119,44 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
         OwnableUpgradeable.__Ownable_init();
     }
 
-    function openOrderETH(address _token, uint24 _fee, uint160 _sqrtPriceX96,
-        uint256 _ethAmount, uint256 _amount,
-        uint256 _targetGasPrice)
-    external payable returns (uint256 _tokenId) {
-
-        require(msg.value >= _ethAmount, "NO_DEPOSIT");
-
-        // make sure that _targetSqrtPriceX96 is also calculated according to the sort
-        address _token0;
-        address _token1;
-        uint256 _amount0;
-        uint256 _amount1;
-        {
-            address wethAddress = address(WETH);
-            if (wethAddress < _token) {
-                _token0 = wethAddress;
-                _amount0 = _ethAmount;
-                _token1 = _token;
-                _amount1 = _amount;
-            } else {
-                _token0 = _token;
-                _amount0 = _amount;
-                _token1 = wethAddress;
-                _amount1 = _ethAmount;
-            }
-        }
-
-        _tokenId = _openOrder(
-            _token0, _token1, _fee, _sqrtPriceX96,
-                _amount0, _amount1,
-                msg.value.sub(_ethAmount), _targetGasPrice
-        );
-    }
-
     function openOrder(address _token0, address _token1, uint24 _fee, uint160 _sqrtPriceX96,
         uint256 _amount0, uint256 _amount1, uint256 _targetGasPrice)
         external payable returns (uint256 _tokenId) {
 
-        _tokenId = _openOrder(
-            _token0, _token1, _fee, _sqrtPriceX96, _amount0, _amount1, msg.value, _targetGasPrice
+        int24 _lowerTick;
+        int24 _upperTick;
+        {
+
+            address _poolAddress = factory.getPool(_token0, _token1, _fee);
+            require (_poolAddress != address(0), "POOL_NOT_FOUND");
+
+            (_lowerTick, _upperTick) = calculateLimitTicks(
+                _poolAddress, _amount0, _amount1, _sqrtPriceX96
+            );
+        }
+
+        (_tokenId,,_amount0,_amount1) = _mintNewPosition(
+            _token0, _token1, _amount0, _amount1, _lowerTick, _upperTick, _fee, msg.sender
         );
+
+        uint256 _serviceFee;
+
+        if (_token0 == address(WETH) && _amount0 > 0) {
+            require(msg.value >= _amount0, "NO_DEPOSIT");
+            _serviceFee = msg.value.sub(_amount0);
+        } else if (_token1 == address(WETH) && _amount1 > 0){
+            require(msg.value >= _amount1, "NO_DEPOSIT");
+            _serviceFee = msg.value.sub(_amount1);
+        } else {
+            _serviceFee = msg.value;
+        }
+        // need to deposit: monitorGasUsage * _targetGasPrice
+        require(monitorGasUsage.mul(_targetGasPrice) <= _serviceFee, "NO_SERVICE_FEE");
+
+        _createDeposit(
+            _tokenId, _token0, _token1,
+            _amount0, _amount1, msg.sender,
+                _serviceFee, _targetGasPrice);
     }
 
     function closeOrder(uint256 _tokenId, uint256 _batchId) external override
@@ -275,6 +292,11 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
         serviceFee = _serviceFee;
     }
 
+    function setMonitorGasUsage(uint256 _monitorGasUsage) external onlyOwner {
+
+        monitorGasUsage = _monitorGasUsage;
+    }
+
     function tokenIdsPerAddressLength(address user) external view returns (uint256) {
         return tokenIdsPerAddress[user].length;
     }
@@ -329,40 +351,7 @@ contract LimitOrderManager is IOrderManager, IERC721Receiver, OwnableUpgradeable
 
     }
 
-    function _openOrder(address _token0, address _token1, uint24 _fee, uint160 _sqrtPriceX96,
-        uint256 _amount0, uint256 _amount1, uint256 _gasDeposit, uint256 _targetGasPrice)
-    private returns (uint256 _tokenId) {
-
-        int24 _lowerTick;
-        int24 _upperTick;
-
-        {
-
-            address _poolAddress = factory.getPool(_token0, _token1, _fee);
-            require (_poolAddress != address(0), "POOL_NOT_FOUND");
-
-            // need to deposit: monitorGasUsage * _targetGasPrice
-            require(monitorGasUsage.mul(_targetGasPrice) <= msg.value, "NO_MONITORING_DEPOSIT");
-
-            (_lowerTick, _upperTick) = calculateLimitTicks(
-                _poolAddress, _amount0, _amount1, _sqrtPriceX96
-            );
-
-        }
-
-        (_tokenId,,_amount0,_amount1) = _mintNewPosition(
-            _token0, _token1, _amount0, _amount1, _lowerTick, _upperTick, _fee, msg.sender
-        );
-
-        _createDeposit(
-            _tokenId, _token0, _token1,
-                _amount0, _amount1, msg.sender,
-                _gasDeposit, _targetGasPrice);
-    }
-
     function _claimOrderFunds(uint256 _tokenId) internal {
-
-        // TODO give reward
 
         Deposit storage deposit = deposits[_tokenId];
         require(deposit.closed > 0, "DEPOSIT_NOT_CLOSED");

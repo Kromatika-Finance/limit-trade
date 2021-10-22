@@ -18,31 +18,31 @@ module.exports = async(callback) => {
 
         // mainet addresses
         let token0 = process.env.WETH;
-        let token1 = "0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9"; // DAI
+        //let token1 = "0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9"; // DAI
 
         // kovan addresses
         // const token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
-        // const token1 = "0x6Ba45c470776fF94568A5802015B8b25965c2CEC"; // XLN
+        let token1 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // XLN
 
         let token0Instance = await ERC20.at(token0);
         let token1Instance = await ERC20.at(token1);
         let token0Decimals = await token0Instance.decimals();
         let token1Decimals = await token1Instance.decimals();
 
-        let amount0 = new BN((0.001 * 10 ** token0Decimals).toString());
+        let amount0 = new BN((0.000001 * 10 ** token0Decimals).toString());
         let amount1 = new BN((0 * 10 ** token1Decimals).toString());
         const margin = new BN(5);
 
         // //mainnet
-        const fee = 3000;
+        //const fee = 3000;
 
         //kovan
-        //const fee = 500;
+        const fee = 500;
 
         // // target price: 1 ETH = 3800 DAI --> sell ETH for DAI MAINNET
         let sellTokenPrice = "3800"; // token1 price of token0
 
-        let targetGasPrice = web3.utils.toWei("50", "gwei");
+        let targetGasPrice = web3.utils.toWei("1", "gwei");
 
         // sort tokens
         [token0, token1, amount0, amount1, sellTokenPrice] = sortTokens(token0, token1, amount0, amount1, sellTokenPrice);
@@ -59,38 +59,37 @@ module.exports = async(callback) => {
 
         const tradeInstance = await LimitOrderManager.deployed();
 
-        let value;
-        let token;
-        let amount;
-        if (token0 == process.env.WETH) {
-            value = amount0;
-            token = token1;
-            amount = amount1;
-        } else {
-            value = amount1;
-            token = token0;
-            amount = amount0;
-        }
+        [token0, token1, amount0, amount1, sellTokenPrice] = sortTokens(token0, token1, amount0, amount1, sellTokenPrice);
+
 
         // calculate the monitoring deposit
         const monitorGasUsage = await tradeInstance.monitorGasUsage();
-        const msgValue = targetGasPrice * monitorGasUsage;
+        let msgValue = targetGasPrice * monitorGasUsage;
+        if (token0 == process.env.WETH && amount0 > 0) {
+            msgValue = amount0.add(new BN(msgValue.toString()))
+        }
+        if (token1 == process.env.WETH && amount1 > 0) {
+            msgValue = amount1.add(new BN(msgValue.toString()))
+        }
 
-        console.log("Token1 --> " + token.toString());
-        console.log("Amount0 --> " + value.toString());
-        console.log("Amount1 --> " + amount.toString());
-        console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
+        console.log("Token0 --> " + token0.toString());
+        console.log("Token1 --> " + token1.toString());
         console.log("Fee --> " + fee.toString());
-        console.log("Deposit --> " +  msgValue.toString());
+        console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
+        console.log("Amount0 --> " + amount0.toString(16));
+        console.log("Amount1 --> " + amount1.toString());
+        console.log("targetGasPrice --> " +  targetGasPrice.toString(16));
+        console.log("Deposit --> " +  msgValue.toString(16));
 
-        const receipt = await tradeInstance.openOrderETH(
-            token,
+        const receipt = await tradeInstance.openOrder(
+            token0,
+            token1,
             fee,
             new BN(targetSqrtPriceX96.toString()),
-            value,
-            amount,
+            amount0,
+            amount1,
             targetGasPrice,
-            {value: value.add(new BN(msgValue)), from: currentAccount}
+            {value: msgValue, from: currentAccount}
         );
         console.log('receipt:', receipt);
 

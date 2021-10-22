@@ -16,12 +16,12 @@ module.exports = async(callback) => {
         var BN = web3.utils.BN;
 
         // mainet addresses
-        let token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
-        let token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
+        // let token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
+        // let token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
 
         // kovan addresses
-        // let token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
-        // let token1 = "0x6Ba45c470776fF94568A5802015B8b25965c2CEC"; // XLN
+        let token0 = "0xa36085f69e2889c224210f603d836748e7dc0088"; // LINK
+        let token1 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
 
         let token0Instance = await ERC20.at(token0);
         let token1Instance = await ERC20.at(token1);
@@ -29,12 +29,16 @@ module.exports = async(callback) => {
         let token1Decimals = await token1Instance.decimals();
 
         let amount0 = new BN((0 * 10 ** token0Decimals).toString());
-        let amount1 = new BN((200 * 10 ** token1Decimals).toString());
-        const fee = 3000;
+        let amount1 = new BN((0.01 * 10 ** token1Decimals).toString());
+        //const fee = 3000;
         const margin = new BN(5);
 
         // target price: 1 UNI = 23.5104 DAI --> buy UNI for DAI
-        let buyTokenPrice = "23.510"; // token1 price of token0
+        //let buyTokenPrice = "23.510"; // token1 price of token0
+
+        // target price: 1 DAI = 98364 XLN --> buy UNI for DAI
+        let buyTokenPrice = "14.438"; // token1 price of token0
+        const fee = 3000;
 
         let targetGasPrice = web3.utils.toWei("50", "gwei");
 

@@ -10,7 +10,7 @@ module.exports = async(callback) => {
         const currentAccount = accounts[0];
 
         const tradeInstance = await LimitOrderManager.deployed();
-        const tokenId = "142674";
+        const tokenId = "7836";
 
         const depositInfo = await tradeInstance.deposits(tokenId);
         console.log(JSON.stringify(depositInfo));

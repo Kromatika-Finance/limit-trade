@@ -17,12 +17,12 @@ module.exports = async(callback) => {
         var BN = web3.utils.BN;
 
         // mainet addresses
-        let token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
-        let token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
+        // let token0 = "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"; //UNI
+        // let token1 = "0x6b175474e89094c44da98b954eedeac495271d0f"; // DAI
 
         // kovan addresses
-        // let token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
-        // let token1 = "0x6Ba45c470776fF94568A5802015B8b25965c2CEC"; // XLN
+        let token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
+        let token1 = "0xa36085f69e2889c224210f603d836748e7dc0088"; // LINK
 
         let token0Instance = await ERC20.at(token0);
         let token1Instance = await ERC20.at(token1);
@@ -34,15 +34,18 @@ module.exports = async(callback) => {
         const margin = new BN(5);
 
         // //mainnet
-        const fee = 3000;
+        //const fee = 3000;
 
         //kovan
-        //const fee = 500;
+        const fee = 3000;
 
         // // target price: 1 UNI = 25.377 DAI --> sell UNI for DAI MAINNET
-        let sellTokenPrice = "31.377"; // token1 price of token0
+        //let sellTokenPrice = "31.377"; // token1 price of token0
 
-        let targetGasPrice = web3.utils.toWei("50", "gwei");
+        // target price: 1 LINK = 1.4 DAI --> sell DAI for LINK KOVAN
+        let sellTokenPrice = "1.4"; // token1 price of token0
+
+        let targetGasPrice = web3.utils.toWei("1", "gwei");
 
         // sort tokens
         [token0, token1, amount0, amount1, sellTokenPrice] = sortTokens(token0, token1, amount0, amount1, sellTokenPrice);
@@ -54,11 +57,6 @@ module.exports = async(callback) => {
         let targetSqrtPriceX96 = encodeSqrtRatioX96(
             JSBI.BigInt(sellTokenPrice * 10 ** token1Decimals),
             JSBI.BigInt(1 * 10 ** token0Decimals));
-
-        // target price: 1 DAI = 100150 XLN --> sell UNI for DAI KOVAN
-        // let targetSqrtPriceX96 = encodeSqrtRatioX96(
-        //     JSBI.BigInt(100150),
-        //     JSBI.BigInt(1));
 
         const tradeInstance = await LimitOrderManager.deployed();
         token0Instance = await ERC20.at(token0);
@@ -90,11 +88,12 @@ module.exports = async(callback) => {
 
         console.log("Token0 --> " + token0.toString());
         console.log("Token1 --> " + token1.toString());
-        console.log("Amount0 --> " + amount0.toString());
+        console.log("Amount0 --> " + amount0.toString(16));
         console.log("Amount1 --> " + amount1.toString());
         console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
-        console.log("Deposit --> " +  msgValue.toString());
+        console.log("Deposit --> " +  msgValue.toString(16));
+        console.log("targetGasPrice --> " +  targetGasPrice.toString(16));
 
         const receipt = await tradeInstance.openOrder(
             token0,
