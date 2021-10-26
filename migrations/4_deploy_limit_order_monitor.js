@@ -14,7 +14,7 @@ module.exports = async function (deployer, network, accounts) {
 
   const kromatikaInstance = await Kromatika.deployed();
 
-  //_maxBatchSize = 20, monitorSize=500, _upkeepInterval = 1, _keeperFee = 10 %
+  //_maxBatchSize = 20, monitorSize=500, monitorInterval = 1 block, monitorFee = 10 %
   await deployProxy(LimitOrderMonitor,
       [limitOrderManagerInstance.address, positionManager, uniswapFactory,
         wrappedETHAddress, kromatikaInstance.address, quoterV2,

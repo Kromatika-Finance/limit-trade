@@ -11,8 +11,8 @@ module.exports = async function (deployer, network, accounts) {
 
   const kromatikaInstance = await Kromatika.deployed();
 
+  // 200k gas cost
   await deployProxy(LimitOrderManager,
-      [positionManager, uniswapFactory, wrappedETHAddress, kromatikaInstance.address, quoterV2,
-        accounts[0], 0, 200000],
+      [positionManager, uniswapFactory, wrappedETHAddress, kromatikaInstance.address, quoterV2, 200000],
       {deployer});
 };

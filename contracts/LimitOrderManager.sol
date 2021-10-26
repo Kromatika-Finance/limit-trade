@@ -47,9 +47,6 @@ contract LimitOrderManager is
         IOrderMonitor monitor;
     }
 
-    /// @dev fee multiplier
-    uint256 private constant FEE_MULTIPLIER = 100000;
-
     /// @dev liquidity deadline
     uint256 private constant LIQUIDITY_DEADLINE = 60 seconds;
 
@@ -99,12 +96,6 @@ contract LimitOrderManager is
     /// @dev krom token
     IERC20 public KROM;
 
-    /// @dev service provider address
-    address public serviceProvider;
-
-    /// @dev service fee serviceFee / FEE_MULTIPLIER = x
-    uint256 public serviceFee;
-
     /// @dev order monitoring gas usage
     uint256 public monitorGasUsage;
 
@@ -113,16 +104,12 @@ contract LimitOrderManager is
     /// @param _factory univ3 factory
     /// @param _WETH wrapped ETH
     /// @param _KROM kromatika token
-    /// @param _serviceProvider service provider address
-    /// @param _serviceFee fee charged for providing services
     /// @param _monitorGasUsage gas usage of the order monitor
     function initialize(INonfungiblePositionManager _nonfungiblePositionManager,
             IUniswapV3Factory _factory,
             IWETH9 _WETH,
             IERC20 _KROM,
             IQuoterV2 _quoterV2,
-            address _serviceProvider,
-            uint256 _serviceFee,
             uint256 _monitorGasUsage) external initializer {
 
         nonfungiblePositionManager = _nonfungiblePositionManager;
@@ -131,8 +118,6 @@ contract LimitOrderManager is
         KROM = _KROM;
         quoterV2 = _quoterV2;
 
-        serviceProvider = _serviceProvider;
-        serviceFee = _serviceFee;
         monitorGasUsage = _monitorGasUsage;
 
         OwnableUpgradeable.__Ownable_init();
@@ -286,18 +271,6 @@ contract LimitOrderManager is
 
         require(_newMonitors.length > 0, "NO_MONITORS");
         monitors = _newMonitors;
-    }
-
-    function setServiceProvider(address _newServiceProvider) external onlyOwner {
-
-        require(_newServiceProvider != address(0), "ADDRESS_ZERO");
-        serviceProvider = _newServiceProvider;
-    }
-
-    function setServiceFee(uint256 _serviceFee) external onlyOwner {
-
-        require(_serviceFee <= FEE_MULTIPLIER, "INVALID_FEE");
-        serviceFee = _serviceFee;
     }
 
     function setMonitorGasUsage(uint256 _monitorGasUsage) external onlyOwner {
@@ -488,6 +461,12 @@ contract LimitOrderManager is
     }
 
     function _quoteKROM(uint256 _amount) private returns (uint256 quote) {
+        // TODO replace with price oracle if/when avail
+        address _poolAddress = factory.getPool(address(WETH), address(KROM), 3000);
+        if (_poolAddress == address(0)) {
+            return 0;
+        }
+
         IQuoterV2.QuoteExactInputSingleParams memory quoteParams =
         IQuoterV2.QuoteExactInputSingleParams({
             tokenIn: address(WETH),
@@ -510,14 +489,6 @@ contract LimitOrderManager is
             array.pop();
         }
         return array;
-    }
-
-    function _chargeFee(uint256 _payment) private returns (uint256) {
-        uint256 _feeDue = _payment.mul(serviceFee).div(FEE_MULTIPLIER);
-        if (_feeDue > 0) {
-            TransferHelper.safeTransfer(address(KROM), serviceProvider, _feeDue);
-        }
-        return _payment.sub(_feeDue);
     }
 
     function _mintNewPosition(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
