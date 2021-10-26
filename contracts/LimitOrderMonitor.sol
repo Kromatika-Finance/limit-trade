@@ -15,6 +15,9 @@ import "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.s
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 
+import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/IQuoterV2.sol";
+
 import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
 
@@ -39,7 +42,9 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     uint256 private constant MAX_BATCH_SIZE = 100;
     uint256 private constant MAX_MONITOR_SIZE = 10000;
 
-    event BatchClosed(uint256 batchId, uint256 batchSize, uint256 gasUsed, uint256 weiForGas);
+    uint256 private constant MONITOR_OVERHEAD = 100000;
+
+    event BatchClosed(uint256 batchId, uint256 batchSize, uint256 gasUsed, uint256 payment);
 
     /// @dev deposits per token Id
     mapping (uint256 => Deposit) public depositPerTokenId;
@@ -56,8 +61,17 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     /// @dev uniV3 position manager
     INonfungiblePositionManager public nonfungiblePositionManager;
 
+    /// @dev wrapper ETH
+    IWETH9 public WETH;
+
     /// @dev univ3 factory
     IUniswapV3Factory public factory;
+
+    /// @dev quoter V2
+    IQuoterV2 public quoterV2;
+
+    /// @dev krom token
+    IERC20 public KROM;
 
     /// @dev max batch size
     uint256 public batchSize;
@@ -74,8 +88,8 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     /// @dev batch count
     uint256 public batchCount;
 
-    //  @dev keeper fee keeperFee / FEE_MULTIPLIER = x
-    uint256 public keeperFee;
+    //  @dev keeper fee monitorFee / FEE_MULTIPLIER = x
+    uint256 public monitorFee;
 
     /// @dev batch info
     mapping(uint256 => BatchInfo) public override batchInfo;
@@ -89,12 +103,15 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     function initialize (IOrderManager _orderManager,
         INonfungiblePositionManager _nonfungiblePositionManager,
         IUniswapV3Factory _factory,
+        IWETH9 _WETH,
+        IERC20 _KROM,
+        IQuoterV2 _quoterV2,
         uint256 _batchSize,
         uint256 _monitorSize,
         uint256 _upkeepInterval,
-        uint256 _keeperFee) external initializer {
+        uint256 _monitorFee) external initializer {
 
-        require(_keeperFee <= FEE_MULTIPLIER, "INVALID_FEE");
+        require(_monitorFee <= FEE_MULTIPLIER, "INVALID_FEE");
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
         require(_monitorSize <= MAX_MONITOR_SIZE, "INVALID_MONITOR_SIZE");
         require(_batchSize <= _monitorSize, "SIZE_MISMATCH");
@@ -102,11 +119,14 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         orderManager = _orderManager;
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
+        WETH = _WETH;
+        KROM = _KROM;
+        quoterV2 = _quoterV2;
 
         batchSize = _batchSize;
         monitorSize = _monitorSize;
         upkeepInterval = _upkeepInterval;
-        keeperFee = _keeperFee;
+        monitorFee = _monitorFee;
 
         OwnableUpgradeable.__Ownable_init();
     }
@@ -115,25 +135,17 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         uint256 _tokenId, uint256 _amount0, uint256 _amount1, uint256 _targetGasPrice
     ) external override onlyTradeManager {
 
-        Deposit storage deposit = depositPerTokenId[_tokenId];
+        require(tokenIds.length < monitorSize, "MONITOR_FULL");
+        Deposit memory newDeposit = Deposit({
+            tokenId: _tokenId,
+            tokensDeposit0: _amount0,
+            tokensDeposit1: _amount1,
+            targetGasPrice: _targetGasPrice
+        });
 
-        if (deposit.tokenId == 0) {
-            require(tokenIds.length < monitorSize, "MONITOR_FULL");
-
-            Deposit memory newDeposit = Deposit({
-                tokenId: _tokenId,
-                tokensDeposit0: _amount0,
-                tokensDeposit1: _amount1,
-                targetGasPrice: _targetGasPrice
-            });
-
-            depositPerTokenId[_tokenId] = newDeposit;
-            tokenIds.push(_tokenId);
-            tokenIndexPerTokenId[_tokenId] = tokenIds.length;
-        } else {
-            // update _targetGasPrice
-            deposit.targetGasPrice = _targetGasPrice;
-        }
+        depositPerTokenId[_tokenId] = newDeposit;
+        tokenIds.push(_tokenId);
+        tokenIndexPerTokenId[_tokenId] = tokenIds.length;
     }
 
     function stopMonitor(uint256 _tokenId) external override onlyTradeManager {
@@ -194,15 +206,17 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         }
 
         gasUsed = gasUsed - gasleft();
-        uint256 weiForGas = _calculateGasCost(gasUsed);
+
+        // convert to KROM
+        uint256 payment = _calculateGasCost(gasUsed);
 
         batchInfo[batchCount] = BatchInfo({
-            payment: weiForGas.div(count),
+            payment: payment.div(count),
             creator: msg.sender
         });
         lastUpkeep = block.number;
 
-        emit BatchClosed(batchCount, count, gasUsed, weiForGas);
+        emit BatchClosed(batchCount, count, gasUsed, payment);
     }
 
     function setBatchSize(uint256 _batchSize) external onlyOwner {
@@ -229,7 +243,19 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     function setKeeperFee(uint256 _keeperFee) external onlyOwner {
 
         require(_keeperFee <= FEE_MULTIPLIER, "INVALID_FEE");
-        keeperFee = _keeperFee;
+        monitorFee = _keeperFee;
+    }
+
+    function _quoteKROM(uint256 _amount) private returns (uint256 quote) {
+        IQuoterV2.QuoteExactInputSingleParams memory quoteParams =
+        IQuoterV2.QuoteExactInputSingleParams({
+            tokenIn: address(WETH),
+            tokenOut: address(KROM),
+            amountIn: _amount,
+            fee: 3000,
+            sqrtPriceLimitX96: 0
+        });
+        (quote,,,) = quoterV2.quoteExactInputSingle(quoteParams);
     }
 
     function _stopMonitor(uint256 _tokenId) internal {
@@ -255,6 +281,9 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
 
         // compare the actual liquidity vs deposit liquidity
         Deposit storage deposit = depositPerTokenId[_tokenId];
+        // TODO check if they have enough balance to cover the estimated cost x multiplier
+        // uint256 balance = orderManager.funding(deposit.owner);
+
         // if current gas price is higher --> quit
         if (tx.gasprice > deposit.targetGasPrice) {
             return false;
@@ -282,17 +311,15 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         return false;
     }
 
-    function _calculateGasCost(uint256 _gasUsed) internal view
-    returns (uint256 weiForGas) {
+    function _calculateGasCost(uint256 _gasUsed) internal
+    returns (uint256 payment) {
 
-        uint256 gasPrice = tx.gasprice;
-        // TODO add some _gasUsed margin
-        weiForGas = gasPrice.mul(_gasUsed);
+        uint256 gasWei = tx.gasprice;
+        uint256 _weiForGas = gasWei.mul(_gasUsed.add(MONITOR_OVERHEAD));
+        _weiForGas = _weiForGas.mul(FEE_MULTIPLIER.add(monitorFee)).div(FEE_MULTIPLIER);
 
-        // charge keeper fee on top of weiForGas
-        weiForGas = weiForGas.mul(FEE_MULTIPLIER.add(keeperFee)).div(FEE_MULTIPLIER);
+        payment = _quoteKROM(_weiForGas);
     }
-
 
     /// @dev Wrapper around `LiquidityAmounts.getAmountsForLiquidity()`.
     function _amountsForLiquidity(

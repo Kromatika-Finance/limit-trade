@@ -16,19 +16,22 @@ import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/IQuoterV2.sol";
 
 import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
+import "./interfaces/IERC677Receiver.sol";
 import "./SelfPermit.sol";
 import "./Multicall.sol";
 
 /// @title  LimitOrderManager
 contract LimitOrderManager is
     IOrderManager,
-    IERC721Receiver,
     OwnableUpgradeable,
     Multicall,
-    SelfPermit {
+    SelfPermit,
+    IERC677Receiver,
+    IERC721Receiver {
 
     using SafeMath for uint256;
 
@@ -42,7 +45,6 @@ contract LimitOrderManager is
         address owner;
         uint256 ownerIndex;
         IOrderMonitor monitor;
-        uint256 gasDeposit;
     }
 
     /// @dev fee multiplier
@@ -63,6 +65,12 @@ contract LimitOrderManager is
     /// @dev fired when a deposit is claimed
     event DepositClaimed(address indexed owner, uint256 indexed tokenId,
         uint256 tokensOwed0, uint256 tokensOwed1, uint256 payment);
+
+    /// @dev fired when a new deposit is made
+    event FundingAdded(address indexed from, uint256 amount);
+
+    /// @dev funding
+    mapping(address => uint256) public override funding;
 
     /// @dev tokenIdsPerAddress[address] => array of token ids
     mapping(address => uint256[]) public tokenIdsPerAddress;
@@ -85,6 +93,12 @@ contract LimitOrderManager is
     /// @dev univ3 factory
     IUniswapV3Factory public factory;
 
+    /// @dev quoter V2
+    IQuoterV2 public quoterV2;
+
+    /// @dev krom token
+    IERC20 public KROM;
+
     /// @dev service provider address
     address public serviceProvider;
 
@@ -98,12 +112,15 @@ contract LimitOrderManager is
     /// @param _nonfungiblePositionManager univ3 nftmanager
     /// @param _factory univ3 factory
     /// @param _WETH wrapped ETH
+    /// @param _KROM kromatika token
     /// @param _serviceProvider service provider address
     /// @param _serviceFee fee charged for providing services
     /// @param _monitorGasUsage gas usage of the order monitor
     function initialize(INonfungiblePositionManager _nonfungiblePositionManager,
             IUniswapV3Factory _factory,
             IWETH9 _WETH,
+            IERC20 _KROM,
+            IQuoterV2 _quoterV2,
             address _serviceProvider,
             uint256 _serviceFee,
             uint256 _monitorGasUsage) external initializer {
@@ -111,6 +128,8 @@ contract LimitOrderManager is
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
         WETH = _WETH;
+        KROM = _KROM;
+        quoterV2 = _quoterV2;
 
         serviceProvider = _serviceProvider;
         serviceFee = _serviceFee;
@@ -139,24 +158,9 @@ contract LimitOrderManager is
             _token0, _token1, _amount0, _amount1, _lowerTick, _upperTick, _fee, msg.sender
         );
 
-        uint256 _serviceFee;
-
-        if (_token0 == address(WETH) && _amount0 > 0) {
-            require(msg.value >= _amount0, "NO_DEPOSIT");
-            _serviceFee = msg.value.sub(_amount0);
-        } else if (_token1 == address(WETH) && _amount1 > 0){
-            require(msg.value >= _amount1, "NO_DEPOSIT");
-            _serviceFee = msg.value.sub(_amount1);
-        } else {
-            _serviceFee = msg.value;
-        }
-        // need to deposit: monitorGasUsage * _targetGasPrice
-        require(monitorGasUsage.mul(_targetGasPrice) <= _serviceFee, "NO_SERVICE_FEE");
-
         _createDeposit(
             _tokenId, _token0, _token1,
-            _amount0, _amount1, msg.sender,
-                _serviceFee, _targetGasPrice);
+            _amount0, _amount1, msg.sender, _targetGasPrice);
     }
 
     function closeOrder(uint256 _tokenId, uint256 _batchId) external override
@@ -201,20 +205,22 @@ contract LimitOrderManager is
         _claimOrderFunds(_tokenId);
     }
 
-    function fundOrder(uint256 _tokenId, uint256 _targetGasPrice) external payable {
+    function addFunding(uint256 _amount) external {
 
-        Deposit storage deposit = deposits[_tokenId];
-        // must be the owner of the deposit
-        require(msg.sender == deposit.owner, 'NOT_OWNER');
-        // must not be closed
-        require(deposit.closed == 0, "DEPOSIT_CLOSED");
+        funding[msg.sender] = funding[msg.sender].add(_amount);
+        TransferHelper.safeTransferFrom(address(KROM), msg.sender, address(this), _amount);
+        emit FundingAdded(msg.sender, _amount);
+    }
 
-        // need to deposit: monitorGasUsage * _targetGasPrice
-        uint256 _gasDepositNeeded = monitorGasUsage.mul(_targetGasPrice);
-        deposit.gasDeposit = deposit.gasDeposit.add(msg.value);
+    function onTokenTransfer(
+        address sender,
+        uint256 amount,
+        bytes calldata data
+    ) external override {
 
-        require(deposit.gasDeposit >= _gasDepositNeeded, "NOT_ENOUGH");
-        deposit.monitor.startMonitor(_tokenId, 0, 0, _targetGasPrice);
+        require(msg.sender == address(KROM), "NOT_KROM");
+        funding[msg.sender] = funding[msg.sender].add(amount);
+        emit FundingAdded(sender, amount);
     }
 
     function retrieveToken(uint256 _tokenId) external {
@@ -268,8 +274,10 @@ contract LimitOrderManager is
         // only transfer custody of one-sided range liquidity
         require(_amount0 == 0 || _amount1 == 0, "INVALID_TOKEN");
 
+        // TODO (pai) parse the call data to get the _targetGasPrice
+
         // create a deposit for the operator
-        _createDeposit(_tokenId, _token0, _token1, _amount0, _amount1, _operator, 0, 0);
+        _createDeposit(_tokenId, _token0, _token1, _amount0, _amount1, _operator, 0);
 
         return this.onERC721Received.selector;
     }
@@ -295,6 +303,10 @@ contract LimitOrderManager is
     function setMonitorGasUsage(uint256 _monitorGasUsage) external onlyOwner {
 
         monitorGasUsage = _monitorGasUsage;
+    }
+
+    function estimateServiceFee(uint256 _targetGasPrice) public override returns (uint256) {
+        return _quoteKROM(monitorGasUsage.mul(_targetGasPrice));
     }
 
     function tokenIdsPerAddressLength(address user) external view returns (uint256) {
@@ -323,8 +335,13 @@ contract LimitOrderManager is
     }
 
     function _createDeposit(uint256 _tokenId, address _token0, address _token1,
-        uint256 _amount0, uint256 _amount1, address _owner,
-        uint256 _gasDeposit, uint256 _targetGasPrice) internal {
+        uint256 _amount0, uint256 _amount1, address _owner, uint256 _targetGasPrice) internal {
+
+        // first check the funding for the deposit
+        uint256 balance = funding[_owner];
+
+        uint256 _serviceFee = estimateServiceFee(_targetGasPrice);
+        require(_serviceFee <= balance, "NOT_ENOUGH_BALANCE");
 
         IOrderMonitor _monitor = _selectMonitor();
         tokenIdsPerAddress[_owner].push(_tokenId);
@@ -339,8 +356,7 @@ contract LimitOrderManager is
             batchId: 0,
             owner: _owner,
             ownerIndex: tokenIdsPerAddress[_owner].length - 1,
-            monitor: _monitor,
-            gasDeposit: _gasDeposit
+            monitor: _monitor
         });
 
         deposits[_tokenId] = newDeposit;
@@ -356,8 +372,12 @@ contract LimitOrderManager is
         Deposit storage deposit = deposits[_tokenId];
         require(deposit.closed > 0, "DEPOSIT_NOT_CLOSED");
 
+        uint256 balance = funding[deposit.owner];
         (uint256 payment, address creator) = deposit.monitor.batchInfo(deposit.batchId);
-        require(payment <= deposit.gasDeposit, "NO_GAS_DEPOSIT");
+        require(balance > 0 && payment <= balance, "NO_FUNDING");
+
+        balance = balance.sub(payment);
+        funding[deposit.owner] = balance;
 
         INonfungiblePositionManager.CollectParams memory collectParams =
         INonfungiblePositionManager.CollectParams({
@@ -371,18 +391,12 @@ contract LimitOrderManager is
         (uint256 _tokensToSend0, uint256 _tokensToSend1) = nonfungiblePositionManager.collect(collectParams);
         require(_tokensToSend0 > 0 || _tokensToSend1 > 0, "NO_TOKENS_OWED");
 
-        payment = _chargeFee(payment);
-        TransferHelper.safeTransferETH(creator, payment);
-
         // close the position
         nonfungiblePositionManager.burn(_tokenId);
 
         _transferToOwner(deposit.token0, _tokensToSend0, deposit.owner);
         _transferToOwner(deposit.token1, _tokensToSend1, deposit.owner);
-
-        if (deposit.gasDeposit > payment) {
-            TransferHelper.safeTransferETH(deposit.owner, deposit.gasDeposit.sub(payment));
-        }
+        _transferToOwner(address(KROM), payment, creator);
 
         emit DepositClaimed(msg.sender, _tokenId, _tokensToSend0, _tokensToSend1, payment);
     }
@@ -473,6 +487,18 @@ contract LimitOrderManager is
         return compressed * _tickSpacing;
     }
 
+    function _quoteKROM(uint256 _amount) private returns (uint256 quote) {
+        IQuoterV2.QuoteExactInputSingleParams memory quoteParams =
+        IQuoterV2.QuoteExactInputSingleParams({
+            tokenIn: address(WETH),
+            tokenOut: address(KROM),
+            amountIn: _amount,
+            fee: 3000,
+            sqrtPriceLimitX96: 0
+        });
+        (quote,,,) = quoterV2.quoteExactInputSingle(quoteParams);
+    }
+
     /// @notice Removes index element from the given array.
     /// @param  index index to remove from the array
     /// @param  array the array itself
@@ -489,7 +515,7 @@ contract LimitOrderManager is
     function _chargeFee(uint256 _payment) private returns (uint256) {
         uint256 _feeDue = _payment.mul(serviceFee).div(FEE_MULTIPLIER);
         if (_feeDue > 0) {
-            TransferHelper.safeTransferETH(serviceProvider, _feeDue);
+            TransferHelper.safeTransfer(address(KROM), serviceProvider, _feeDue);
         }
         return _payment.sub(_feeDue);
     }
