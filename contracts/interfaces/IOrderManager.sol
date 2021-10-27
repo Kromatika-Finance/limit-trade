@@ -8,7 +8,7 @@ interface IOrderManager {
         uint256 _tokenId, uint256 _batchId
     ) external returns (uint256, uint256);
 
-    function funding(address owner) external view returns (uint256 balance);
+    function isUnderfunded(address owner) external returns (bool, uint256);
 
-    function estimateServiceFee(uint256 _targetGasPrice) external returns (uint256);
+    function funding(address owner) external view returns (uint256 balance);
 }

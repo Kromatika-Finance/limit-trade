@@ -16,7 +16,7 @@ import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
-import "@uniswap/v3-periphery/contracts/interfaces/IQuoterV2.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
 
 import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
@@ -31,6 +31,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         uint256 tokensDeposit0;
         uint256 tokensDeposit1;
         uint256 targetGasPrice;
+        address owner;
     }
 
     struct BatchInfo {
@@ -68,7 +69,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     IUniswapV3Factory public factory;
 
     /// @dev quoter V2
-    IQuoterV2 public quoterV2;
+    IQuoter public quoter;
 
     /// @dev krom token
     IERC20 public KROM;
@@ -105,7 +106,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         IUniswapV3Factory _factory,
         IWETH9 _WETH,
         IERC20 _KROM,
-        IQuoterV2 _quoterV2,
+        IQuoter _quoter,
         uint256 _batchSize,
         uint256 _monitorSize,
         uint256 _upkeepInterval,
@@ -121,7 +122,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         factory = _factory;
         WETH = _WETH;
         KROM = _KROM;
-        quoterV2 = _quoterV2;
+        quoter = _quoter;
 
         batchSize = _batchSize;
         monitorSize = _monitorSize;
@@ -132,7 +133,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     }
     
     function startMonitor(
-        uint256 _tokenId, uint256 _amount0, uint256 _amount1, uint256 _targetGasPrice
+        uint256 _tokenId, uint256 _amount0, uint256 _amount1, uint256 _targetGasPrice, address _owner
     ) external override onlyTradeManager {
 
         require(tokenIds.length < monitorSize, "MONITOR_FULL");
@@ -140,7 +141,8 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
             tokenId: _tokenId,
             tokensDeposit0: _amount0,
             tokensDeposit1: _amount1,
-            targetGasPrice: _targetGasPrice
+            targetGasPrice: _targetGasPrice,
+            owner: _owner
         });
 
         depositPerTokenId[_tokenId] = newDeposit;
@@ -155,7 +157,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     function checkUpkeep(
         bytes calldata checkData
     )
-    external view override
+    external override
     returns (
         bool upkeepNeeded,
         bytes memory performData
@@ -210,6 +212,8 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         // convert to KROM
         uint256 payment = _calculateGasCost(gasUsed);
 
+        // TODO (pai) pre-claim the funds from the manager
+
         batchInfo[batchCount] = BatchInfo({
             payment: payment.div(count),
             creator: msg.sender
@@ -247,15 +251,14 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     }
 
     function _quoteKROM(uint256 _amount) private returns (uint256 quote) {
-        IQuoterV2.QuoteExactInputSingleParams memory quoteParams =
-        IQuoterV2.QuoteExactInputSingleParams({
-            tokenIn: address(WETH),
-            tokenOut: address(KROM),
-            amountIn: _amount,
-            fee: 3000,
-            sqrtPriceLimitX96: 0
-        });
-        (quote,,,) = quoterV2.quoteExactInputSingle(quoteParams);
+
+        address _poolAddress = factory.getPool(address(WETH), address(KROM), 3000);
+        if (_poolAddress == address(0)) {
+            return 0;
+        }
+        quote = quoter.quoteExactInputSingle(
+            address(WETH), address(KROM), 3000, _amount, 0
+        );
     }
 
     function _stopMonitor(uint256 _tokenId) internal {
@@ -276,16 +279,15 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         }
     }
 
-    function _checkLimitConditions(uint256 _tokenId) internal view
+    function _checkLimitConditions(uint256 _tokenId) internal
         returns (bool) {
 
-        // compare the actual liquidity vs deposit liquidity
         Deposit storage deposit = depositPerTokenId[_tokenId];
-        // TODO check if they have enough balance to cover the estimated cost x multiplier
-        // uint256 balance = orderManager.funding(deposit.owner);
 
-        // if current gas price is higher --> quit
-        if (tx.gasprice > deposit.targetGasPrice) {
+        (bool underfunded,) = orderManager.isUnderfunded(deposit.owner);
+
+        // if current gas price is higher and underfunded --> quit
+        if (underfunded && tx.gasprice > deposit.targetGasPrice) {
             return false;
         }
 

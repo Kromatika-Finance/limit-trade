@@ -16,11 +16,10 @@ import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
-import "@uniswap/v3-periphery/contracts/interfaces/IQuoterV2.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
 
 import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
-import "./interfaces/IERC677Receiver.sol";
 import "./SelfPermit.sol";
 import "./Multicall.sol";
 
@@ -30,7 +29,6 @@ contract LimitOrderManager is
     OwnableUpgradeable,
     Multicall,
     SelfPermit,
-    IERC677Receiver,
     IERC721Receiver {
 
     using SafeMath for uint256;
@@ -45,6 +43,7 @@ contract LimitOrderManager is
         address owner;
         uint256 ownerIndex;
         IOrderMonitor monitor;
+        uint256 serviceFee;
     }
 
     /// @dev liquidity deadline
@@ -63,11 +62,17 @@ contract LimitOrderManager is
     event DepositClaimed(address indexed owner, uint256 indexed tokenId,
         uint256 tokensOwed0, uint256 tokensOwed1, uint256 payment);
 
-    /// @dev fired when a new deposit is made
+    /// @dev fired when a new funding is made
     event FundingAdded(address indexed from, uint256 amount);
+
+    /// @dev fired when funding is withdrawn
+    event FundingWithdrawn(address indexed from, uint256 amount);
 
     /// @dev funding
     mapping(address => uint256) public override funding;
+
+    /// @dev reserved funds
+    mapping(address => uint256) public reservedWeiFunds;
 
     /// @dev tokenIdsPerAddress[address] => array of token ids
     mapping(address => uint256[]) public tokenIdsPerAddress;
@@ -91,7 +96,7 @@ contract LimitOrderManager is
     IUniswapV3Factory public factory;
 
     /// @dev quoter V2
-    IQuoterV2 public quoterV2;
+    IQuoter public quoter;
 
     /// @dev krom token
     IERC20 public KROM;
@@ -109,14 +114,14 @@ contract LimitOrderManager is
             IUniswapV3Factory _factory,
             IWETH9 _WETH,
             IERC20 _KROM,
-            IQuoterV2 _quoterV2,
+            IQuoter _quoter,
             uint256 _monitorGasUsage) external initializer {
 
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
         WETH = _WETH;
         KROM = _KROM;
-        quoterV2 = _quoterV2;
+        quoter = _quoter;
 
         monitorGasUsage = _monitorGasUsage;
 
@@ -197,15 +202,18 @@ contract LimitOrderManager is
         emit FundingAdded(msg.sender, _amount);
     }
 
-    function onTokenTransfer(
-        address sender,
-        uint256 amount,
-        bytes calldata data
-    ) external override {
+    function withdrawFunding(uint256 _amount) external {
 
-        require(msg.sender == address(KROM), "NOT_KROM");
-        funding[msg.sender] = funding[msg.sender].add(amount);
-        emit FundingAdded(sender, amount);
+        uint256 balance = funding[msg.sender];
+        uint256 reservedKROM = quoteKROM(reservedWeiFunds[msg.sender]);
+
+        require(balance >= _amount, "NOT_ENOUGH_BALANCE");
+        balance = balance.sub(_amount);
+        require(balance >= reservedKROM, "NOT_ENOUGH_RESERVES");
+
+        funding[msg.sender] = balance;
+        TransferHelper.safeTransfer(address(KROM), msg.sender, _amount);
+        emit FundingWithdrawn(msg.sender, _amount);
     }
 
     function retrieveToken(uint256 _tokenId) external {
@@ -225,6 +233,7 @@ contract LimitOrderManager is
         tokenIdsPerAddress[msg.sender] = removeElementFromArray(
             deposit.ownerIndex, tokenIdsPerAddress[msg.sender]
         );
+        reservedWeiFunds[deposit.owner] = reservedWeiFunds[deposit.owner].sub(deposit.serviceFee);
         delete deposits[_tokenId];
     }
 
@@ -267,6 +276,29 @@ contract LimitOrderManager is
         return this.onERC721Received.selector;
     }
 
+    function quoteKROM(uint256 _weiAmount) public returns (uint256 quote) {
+        // TODO replace with price oracle if/when avail
+        address _poolAddress = factory.getPool(address(WETH), address(KROM), 3000);
+        if (_poolAddress == address(0)) {
+            return 0;
+        }
+        quote = quoter.quoteExactInputSingle(
+            address(WETH), address(KROM), 3000, _weiAmount, 0
+        );
+    }
+
+    function isUnderfunded(address _owner) external override returns (
+        bool underfunded, uint256 amount
+    ) {
+        uint256 reservedKROM = quoteKROM(reservedWeiFunds[_owner]);
+        uint256 balance = funding[_owner];
+
+        if (reservedKROM > balance) {
+            underfunded = true;
+            amount = reservedKROM.sub(balance);
+        }
+    }
+
     function setMonitors(IOrderMonitor[] calldata _newMonitors) external onlyOwner {
 
         require(_newMonitors.length > 0, "NO_MONITORS");
@@ -278,8 +310,8 @@ contract LimitOrderManager is
         monitorGasUsage = _monitorGasUsage;
     }
 
-    function estimateServiceFee(uint256 _targetGasPrice) public override returns (uint256) {
-        return _quoteKROM(monitorGasUsage.mul(_targetGasPrice));
+    function estimateServiceFeeWei(uint256 _targetGasPrice) public view returns (uint256) {
+        return monitorGasUsage.mul(_targetGasPrice);
     }
 
     function tokenIdsPerAddressLength(address user) external view returns (uint256) {
@@ -311,10 +343,8 @@ contract LimitOrderManager is
         uint256 _amount0, uint256 _amount1, address _owner, uint256 _targetGasPrice) internal {
 
         // first check the funding for the deposit
-        uint256 balance = funding[_owner];
-
-        uint256 _serviceFee = estimateServiceFee(_targetGasPrice);
-        require(_serviceFee <= balance, "NOT_ENOUGH_BALANCE");
+        uint256 _serviceFeeWei = estimateServiceFeeWei(_targetGasPrice);
+        reservedWeiFunds[_owner] = reservedWeiFunds[_owner].add(_serviceFeeWei);
 
         IOrderMonitor _monitor = _selectMonitor();
         tokenIdsPerAddress[_owner].push(_tokenId);
@@ -329,12 +359,13 @@ contract LimitOrderManager is
             batchId: 0,
             owner: _owner,
             ownerIndex: tokenIdsPerAddress[_owner].length - 1,
-            monitor: _monitor
+            monitor: _monitor,
+            serviceFee: _serviceFeeWei
         });
 
         deposits[_tokenId] = newDeposit;
 
-        _monitor.startMonitor(_tokenId, _amount0, _amount1, _targetGasPrice);
+        _monitor.startMonitor(_tokenId, _amount0, _amount1, _targetGasPrice, _owner);
 
         emit DepositCreated(_owner, _tokenId);
 
@@ -351,6 +382,7 @@ contract LimitOrderManager is
 
         balance = balance.sub(payment);
         funding[deposit.owner] = balance;
+        reservedWeiFunds[deposit.owner] = reservedWeiFunds[deposit.owner].sub(deposit.serviceFee);
 
         INonfungiblePositionManager.CollectParams memory collectParams =
         INonfungiblePositionManager.CollectParams({
@@ -458,24 +490,6 @@ contract LimitOrderManager is
         int24 compressed = tick / _tickSpacing;
         if (tick < 0 && tick % _tickSpacing != 0) compressed--;
         return compressed * _tickSpacing;
-    }
-
-    function _quoteKROM(uint256 _amount) private returns (uint256 quote) {
-        // TODO replace with price oracle if/when avail
-        address _poolAddress = factory.getPool(address(WETH), address(KROM), 3000);
-        if (_poolAddress == address(0)) {
-            return 0;
-        }
-
-        IQuoterV2.QuoteExactInputSingleParams memory quoteParams =
-        IQuoterV2.QuoteExactInputSingleParams({
-            tokenIn: address(WETH),
-            tokenOut: address(KROM),
-            amountIn: _amount,
-            fee: 3000,
-            sqrtPriceLimitX96: 0
-        });
-        (quote,,,) = quoterV2.quoteExactInputSingle(quoteParams);
     }
 
     /// @notice Removes index element from the given array.
