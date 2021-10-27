@@ -45,7 +45,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
 
     uint256 private constant MONITOR_OVERHEAD = 100000;
 
-    event BatchClosed(uint256 batchId, uint256 batchSize, uint256 gasUsed, uint256 payment);
+    event BatchClosed(uint256 batchId, uint256 batchSize, uint256 gasUsed, uint256 payment, bytes data);
 
     /// @dev deposits per token Id
     mapping (uint256 => Deposit) public depositPerTokenId;
@@ -192,35 +192,36 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         bytes calldata performData
     ) external override {
 
-        uint256 gasUsed = gasleft();
+        uint256 _gasUsed = gasleft();
         batchCount++;
 
-        (uint256[] memory _tokenIds, uint256 count) = abi.decode(
+        (uint256[] memory _tokenIds, uint256 _count) = abi.decode(
             performData, (uint256[], uint256)
         );
 
         uint256 _tokenId;
-        for (uint256 i = 0; i < count; i++) {
+        for (uint256 i = 0; i < _count; i++) {
             _tokenId = _tokenIds[i];
             require(_checkLimitConditions(_tokenId), "INVALID_TRADE");
             _stopMonitor(_tokenId);
             orderManager.closeOrder(_tokenId, batchCount);
         }
 
-        gasUsed = gasUsed - gasleft();
+        _gasUsed = _gasUsed - gasleft();
 
         // convert to KROM
-        uint256 payment = _calculateGasCost(gasUsed);
+        uint256 payment = _calculatePaymentAmount(_gasUsed);
 
-        // TODO (pai) pre-claim the funds from the manager
+        // TODO (pai) how we can send the funds to sender right away
+        // without looping through all tokens once again
 
         batchInfo[batchCount] = BatchInfo({
-            payment: payment.div(count),
+            payment: payment.div(_count),
             creator: msg.sender
         });
         lastUpkeep = block.number;
 
-        emit BatchClosed(batchCount, count, gasUsed, payment);
+        emit BatchClosed(batchCount, _count, _gasUsed, payment, performData);
     }
 
     function setBatchSize(uint256 _batchSize) external onlyOwner {
@@ -262,8 +263,6 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     }
 
     function _stopMonitor(uint256 _tokenId) internal {
-
-        // TODO checks
 
         delete depositPerTokenId[_tokenId];
 
@@ -313,7 +312,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         return false;
     }
 
-    function _calculateGasCost(uint256 _gasUsed) internal
+    function _calculatePaymentAmount(uint256 _gasUsed) internal
     returns (uint256 payment) {
 
         uint256 gasWei = tx.gasprice;

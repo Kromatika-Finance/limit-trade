@@ -149,8 +149,8 @@ contract LimitOrderManager is
         );
 
         _createDeposit(
-            _tokenId, _token0, _token1,
-            _amount0, _amount1, msg.sender, _targetGasPrice);
+            _tokenId, _token0, _token1, _amount0, _amount1, msg.sender, _targetGasPrice
+        );
     }
 
     function closeOrder(uint256 _tokenId, uint256 _batchId) external override
@@ -242,7 +242,7 @@ contract LimitOrderManager is
         address _operator,
         address,
         uint256 _tokenId,
-        bytes calldata
+        bytes calldata _data
     ) external override returns (bytes4) {
 
         uint256 _amount0;
@@ -268,23 +268,12 @@ contract LimitOrderManager is
         // only transfer custody of one-sided range liquidity
         require(_amount0 == 0 || _amount1 == 0, "INVALID_TOKEN");
 
-        // TODO (pai) parse the call data to get the _targetGasPrice
-
         // create a deposit for the operator
-        _createDeposit(_tokenId, _token0, _token1, _amount0, _amount1, _operator, 0);
+        _createDeposit(
+            _tokenId, _token0, _token1, _amount0, _amount1, _operator, abi.decode(_data, (uint256))
+        );
 
         return this.onERC721Received.selector;
-    }
-
-    function quoteKROM(uint256 _weiAmount) public returns (uint256 quote) {
-        // TODO replace with price oracle if/when avail
-        address _poolAddress = factory.getPool(address(WETH), address(KROM), 3000);
-        if (_poolAddress == address(0)) {
-            return 0;
-        }
-        quote = quoter.quoteExactInputSingle(
-            address(WETH), address(KROM), 3000, _weiAmount, 0
-        );
     }
 
     function isUnderfunded(address _owner) external override returns (
@@ -310,12 +299,19 @@ contract LimitOrderManager is
         monitorGasUsage = _monitorGasUsage;
     }
 
-    function estimateServiceFeeWei(uint256 _targetGasPrice) public view returns (uint256) {
-        return monitorGasUsage.mul(_targetGasPrice);
-    }
-
     function tokenIdsPerAddressLength(address user) external view returns (uint256) {
         return tokenIdsPerAddress[user].length;
+    }
+
+    function quoteKROM(uint256 _weiAmount) public returns (uint256 quote) {
+        // TODO replace with price oracle if/when avail
+        address _poolAddress = factory.getPool(address(WETH), address(KROM), 3000);
+        if (_poolAddress == address(0)) {
+            return 0;
+        }
+        quote = quoter.quoteExactInputSingle(
+            address(WETH), address(KROM), 3000, _weiAmount, 0
+        );
     }
 
     function calculateLimitTicks(address _poolAddress, uint256 _amount0, uint256 _amount1,
@@ -337,6 +333,10 @@ contract LimitOrderManager is
             _amount0, _amount1,
             _pool, tickSpacing);
 
+    }
+
+    function estimateServiceFeeWei(uint256 _targetGasPrice) public view returns (uint256) {
+        return monitorGasUsage.mul(_targetGasPrice);
     }
 
     function _createDeposit(uint256 _tokenId, address _token0, address _token1,
