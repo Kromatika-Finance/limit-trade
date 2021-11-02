@@ -15,9 +15,6 @@ import "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.s
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 
-import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
-import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
-
 import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
 
@@ -62,17 +59,8 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     /// @dev uniV3 position manager
     INonfungiblePositionManager public nonfungiblePositionManager;
 
-    /// @dev wrapper ETH
-    IWETH9 public WETH;
-
     /// @dev univ3 factory
     IUniswapV3Factory public factory;
-
-    /// @dev quoter V2
-    IQuoter public quoter;
-
-    /// @dev krom token
-    IERC20 public KROM;
 
     /// @dev max batch size
     uint256 public batchSize;
@@ -104,9 +92,6 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     function initialize (IOrderManager _orderManager,
         INonfungiblePositionManager _nonfungiblePositionManager,
         IUniswapV3Factory _factory,
-        IWETH9 _WETH,
-        IERC20 _KROM,
-        IQuoter _quoter,
         uint256 _batchSize,
         uint256 _monitorSize,
         uint256 _upkeepInterval,
@@ -120,9 +105,6 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         orderManager = _orderManager;
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
-        WETH = _WETH;
-        KROM = _KROM;
-        quoter = _quoter;
 
         batchSize = _batchSize;
         monitorSize = _monitorSize;
@@ -155,7 +137,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     }
 
     function checkUpkeep(
-        bytes calldata checkData
+        bytes calldata
     )
     external override
     returns (
@@ -171,7 +153,8 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
             // iterate through all active tokens;
             for (uint256 i = 0; i < tokenIds.length; i++) {
                 _tokenId = tokenIds[i];
-                upkeepNeeded = _checkLimitConditions(_tokenId);
+                // TODO (pai) consider using fast price feed or default price
+                upkeepNeeded = _checkLimitConditions(_tokenId, tx.gasprice > 0 ? true : false);
                 if (upkeepNeeded) {
                     batchTokenIds[count] = _tokenId;
                     count++;
@@ -193,6 +176,10 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     ) external override {
 
         uint256 _gasUsed = gasleft();
+
+        bool validTrade;
+        uint256 validCount;
+
         batchCount++;
 
         (uint256[] memory _tokenIds, uint256 _count) = abi.decode(
@@ -202,9 +189,12 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         uint256 _tokenId;
         for (uint256 i = 0; i < _count; i++) {
             _tokenId = _tokenIds[i];
-            require(_checkLimitConditions(_tokenId), "INVALID_TRADE");
-            _stopMonitor(_tokenId);
-            orderManager.closeOrder(_tokenId, batchCount);
+            validTrade = _checkLimitConditions(_tokenId, true);
+            if (validTrade) {
+                validCount++;
+                _stopMonitor(_tokenId);
+                orderManager.closeOrder(_tokenId, batchCount);
+            }
         }
 
         _gasUsed = _gasUsed - gasleft();
@@ -216,12 +206,12 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         // without looping through all tokens once again
 
         batchInfo[batchCount] = BatchInfo({
-            payment: payment.div(_count),
+            payment: payment.div(validCount),
             creator: msg.sender
         });
         lastUpkeep = block.number;
 
-        emit BatchClosed(batchCount, _count, _gasUsed, payment, performData);
+        emit BatchClosed(batchCount, validCount, _gasUsed, payment, performData);
     }
 
     function setBatchSize(uint256 _batchSize) external onlyOwner {
@@ -251,17 +241,6 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         monitorFee = _keeperFee;
     }
 
-    function _quoteKROM(uint256 _amount) private returns (uint256 quote) {
-
-        address _poolAddress = factory.getPool(address(WETH), address(KROM), 3000);
-        if (_poolAddress == address(0)) {
-            return 0;
-        }
-        quote = quoter.quoteExactInputSingle(
-            address(WETH), address(KROM), 3000, _amount, 0
-        );
-    }
-
     function _stopMonitor(uint256 _tokenId) internal {
 
         delete depositPerTokenId[_tokenId];
@@ -278,15 +257,15 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         }
     }
 
-    function _checkLimitConditions(uint256 _tokenId) internal
+    function _checkLimitConditions(uint256 _tokenId, bool checkGasPrice) internal
         returns (bool) {
 
         Deposit storage deposit = depositPerTokenId[_tokenId];
 
         (bool underfunded,) = orderManager.isUnderfunded(deposit.owner);
 
-        // if current gas price is higher and underfunded --> quit
-        if (underfunded && tx.gasprice > deposit.targetGasPrice) {
+        // if current gas price is higher or underfunded --> quit
+        if (underfunded || (checkGasPrice && tx.gasprice > deposit.targetGasPrice)) {
             return false;
         }
 
@@ -312,14 +291,14 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         return false;
     }
 
-    function _calculatePaymentAmount(uint256 _gasUsed) internal
+    function _calculatePaymentAmount(uint256 _gasUsed) internal view
     returns (uint256 payment) {
 
         uint256 gasWei = tx.gasprice;
         uint256 _weiForGas = gasWei.mul(_gasUsed.add(MONITOR_OVERHEAD));
         _weiForGas = _weiForGas.mul(FEE_MULTIPLIER.add(monitorFee)).div(FEE_MULTIPLIER);
 
-        payment = _quoteKROM(_weiForGas);
+        payment = orderManager.quoteKROM(_weiForGas);
     }
 
     /// @dev Wrapper around `LiquidityAmounts.getAmountsForLiquidity()`.

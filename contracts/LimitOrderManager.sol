@@ -9,6 +9,7 @@ import '@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol';
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
+import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol";
@@ -16,7 +17,6 @@ import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
-import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
 
 import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
@@ -48,6 +48,10 @@ contract LimitOrderManager is
 
     /// @dev liquidity deadline
     uint256 private constant LIQUIDITY_DEADLINE = 60 seconds;
+
+    uint24 public constant POOL_FEE = 3000;
+
+    uint32 public constant TWAP_PERIOD = 60;
 
     /// @dev fired when a new deposit is made
     event DepositCreated(address indexed owner, uint256 indexed tokenId);
@@ -95,9 +99,6 @@ contract LimitOrderManager is
     /// @dev univ3 factory
     IUniswapV3Factory public factory;
 
-    /// @dev quoter V2
-    IQuoter public quoter;
-
     /// @dev krom token
     IERC20 public KROM;
 
@@ -114,14 +115,12 @@ contract LimitOrderManager is
             IUniswapV3Factory _factory,
             IWETH9 _WETH,
             IERC20 _KROM,
-            IQuoter _quoter,
-            uint256 _monitorGasUsage) external initializer {
+            uint256 _monitorGasUsage) public initializer {
 
         nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
         WETH = _WETH;
         KROM = _KROM;
-        quoter = _quoter;
 
         monitorGasUsage = _monitorGasUsage;
 
@@ -261,8 +260,9 @@ contract LimitOrderManager is
             address _poolAddress = factory.getPool(_token0, _token1, _fee);
             require (_poolAddress != address(0), "POOL_NOT_FOUND");
 
-            (_amount0, _amount1) = _amountsForLiquidity(IUniswapV3Pool(_poolAddress),
-                tickLower, tickUpper, liquidity);
+            (_amount0, _amount1) = _amountsForLiquidity(
+                IUniswapV3Pool(_poolAddress), tickLower, tickUpper, liquidity
+            );
         }
 
         // only transfer custody of one-sided range liquidity
@@ -276,7 +276,7 @@ contract LimitOrderManager is
         return this.onERC721Received.selector;
     }
 
-    function isUnderfunded(address _owner) external override returns (
+    function isUnderfunded(address _owner) external view override returns (
         bool underfunded, uint256 amount
     ) {
         uint256 reservedKROM = quoteKROM(reservedWeiFunds[_owner]);
@@ -303,15 +303,18 @@ contract LimitOrderManager is
         return tokenIdsPerAddress[user].length;
     }
 
-    function quoteKROM(uint256 _weiAmount) public returns (uint256 quote) {
-        // TODO replace with price oracle if/when avail
-        address _poolAddress = factory.getPool(address(WETH), address(KROM), 3000);
-        if (_poolAddress == address(0)) {
-            return 0;
+    function quoteKROM(uint256 _weiAmount) public view override returns (uint256 quote) {
+
+        address _poolAddress = factory.getPool(address(WETH), address(KROM), POOL_FEE);
+        require(_poolAddress != address(0), "NO_KROM_POOL");
+
+        if (_weiAmount > 0) {
+            // consult the pool in the last 5 min
+            int24 timeWeightedAverageTick = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
+            quote = OracleLibrary.getQuoteAtTick(
+                timeWeightedAverageTick, _toUint128(_weiAmount), address(WETH), address(KROM)
+            );
         }
-        quote = quoter.quoteExactInputSingle(
-            address(WETH), address(KROM), 3000, _weiAmount, 0
-        );
     }
 
     function calculateLimitTicks(address _poolAddress, uint256 _amount0, uint256 _amount1,
@@ -396,12 +399,18 @@ contract LimitOrderManager is
         (uint256 _tokensToSend0, uint256 _tokensToSend1) = nonfungiblePositionManager.collect(collectParams);
         require(_tokensToSend0 > 0 || _tokensToSend1 > 0, "NO_TOKENS_OWED");
 
-        // close the position
+        // close the position ; TODO maybe avoid this
         nonfungiblePositionManager.burn(_tokenId);
 
         _transferToOwner(deposit.token0, _tokensToSend0, deposit.owner);
         _transferToOwner(deposit.token1, _tokensToSend1, deposit.owner);
-        _transferToOwner(address(KROM), payment, creator);
+        _transferFees(payment, creator, address(deposit.monitor));
+
+        // remove information related to tokenId
+        tokenIdsPerAddress[deposit.owner] = removeElementFromArray(
+            deposit.ownerIndex, tokenIdsPerAddress[deposit.owner]
+        );
+        delete deposits[_tokenId];
 
         emit DepositClaimed(msg.sender, _tokenId, _tokensToSend0, _tokensToSend1, payment);
     }
@@ -482,6 +491,12 @@ contract LimitOrderManager is
         require(_tickUpper <= TickMath.MAX_TICK, "tickUpper too high");
         require(_tickLower % _tickSpacing == 0, "tickLower % tickSpacing");
         require(_tickUpper % _tickSpacing == 0, "tickUpper % tickSpacing");
+    }
+
+    /// @dev Casts uint256 to uint128 with overflow check.
+    function _toUint128(uint256 x) internal pure returns (uint128) {
+        assert(x <= type(uint128).max);
+        return uint128(x);
     }
 
     /// @dev Rounds tick down towards negative infinity so that it's a multiple
@@ -580,6 +595,12 @@ contract LimitOrderManager is
             } else {
                 TransferHelper.safeTransfer(_token, _owner, _amount);
             }
+        }
+    }
+
+    function _transferFees(uint256 _amount, address _owner, address) internal virtual {
+        if (_amount > 0) {
+            TransferHelper.safeTransfer(address(KROM), _owner, _amount);
         }
     }
 

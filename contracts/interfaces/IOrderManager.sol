@@ -10,5 +10,7 @@ interface IOrderManager {
 
     function isUnderfunded(address owner) external returns (bool, uint256);
 
+    function quoteKROM(uint256 weiAmount) external view returns (uint256 quote);
+
     function funding(address owner) external view returns (uint256 balance);
 }
