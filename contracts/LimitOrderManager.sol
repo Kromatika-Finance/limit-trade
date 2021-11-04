@@ -4,17 +4,16 @@ pragma solidity >=0.7.5;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
+import '@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol';
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import '@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol';
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
 import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
-import "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol";
-import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
-import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
+import "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3MintCallback.sol";
+import "@uniswap/v3-periphery/contracts/libraries/CallbackValidation.sol";
 
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 
@@ -22,28 +21,39 @@ import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
 import "./SelfPermit.sol";
 import "./Multicall.sol";
+import "./UniswapUtils.sol";
 
 /// @title  LimitOrderManager
 contract LimitOrderManager is
     IOrderManager,
+    ERC721Upgradeable,
     OwnableUpgradeable,
+    IUniswapV3MintCallback,
     Multicall,
-    SelfPermit,
-    IERC721Receiver {
+    SelfPermit {
 
     using SafeMath for uint256;
 
-    struct Deposit {
+    struct LimitOrder {
         uint256 tokenId;
-        uint256 opened;
-        address token0;
-        address token1;
-        uint256 closed;
+        IUniswapV3Pool pool;
+        int24 tickLower;
+        int24 tickUpper;
+        uint128 liquidity;
+        uint128 orderType;
+        uint256 processed;
         uint256 batchId;
-        address owner;
-        uint256 ownerIndex;
         IOrderMonitor monitor;
         uint256 serviceFee;
+        uint256 serviceFeePaid;
+        uint256 targetGasPrice;
+        uint256 tokensOwed0;
+        uint256 tokensOwed1;
+    }
+
+     struct MintCallbackData {
+        PoolAddress.PoolKey poolKey;
+        address payer;
     }
 
     /// @dev liquidity deadline
@@ -53,17 +63,17 @@ contract LimitOrderManager is
 
     uint32 public constant TWAP_PERIOD = 60;
 
-    /// @dev fired when a new deposit is made
-    event DepositCreated(address indexed owner, uint256 indexed tokenId);
+    /// @dev fired when a new limitOrder is made
+    event LimitOrderCreated(address indexed owner, uint256 indexed tokenId);
 
-    /// @dev fired when a deposit is closed
-    event DepositClosed(address indexed owner, uint256 indexed tokenId);
+    /// @dev fired when a an order is processed
+    event LimitOrderProcessed(address indexed owner, uint256 indexed tokenId);
 
-    /// @dev fired when a deposit is cancelled
-    event DepositCancelled(address indexed owner, uint256 indexed tokenId);
+    /// @dev fired when an order is cancelled
+    event LimitOrderCancelled(address indexed owner, uint256 indexed tokenId);
 
-    /// @dev fired when a deposit is claimed
-    event DepositClaimed(address indexed owner, uint256 indexed tokenId,
+    /// @dev fired when an order is collected
+    event LimitOrderCollected(address indexed owner, uint256 indexed tokenId,
         uint256 tokensOwed0, uint256 tokensOwed1, uint256 payment);
 
     /// @dev fired when a new funding is made
@@ -78,20 +88,11 @@ contract LimitOrderManager is
     /// @dev reserved funds
     mapping(address => uint256) public reservedWeiFunds;
 
-    /// @dev tokenIdsPerAddress[address] => array of token ids
-    mapping(address => uint256[]) public tokenIdsPerAddress;
-
-    /// @dev deposits per token id
-    mapping (uint256 => Deposit) public deposits;
+    /// @dev limitOrders per token id
+    mapping (uint256 => LimitOrder) public limitOrders;
 
     /// @dev monitor pool
     IOrderMonitor[] public monitors;
-
-    //  @dev last monitor index + 1 ; always > 0
-    uint256 public nextMonitor;
-
-    /// @dev uniV3 position manager
-    INonfungiblePositionManager public nonfungiblePositionManager;
 
     /// @dev wrapper ETH
     IWETH9 public WETH;
@@ -105,93 +106,160 @@ contract LimitOrderManager is
     /// @dev order monitoring gas usage
     uint256 public monitorGasUsage;
 
-    /// @notice Initializes the smart contract instead of a constructor
-    /// @param _nonfungiblePositionManager univ3 nftmanager
+    /// @dev last monitor index + 1 ; always > 0
+    uint256 public nextMonitor;
+
+    /// @dev The ID of the next token that will be minted. Skips 0
+    uint176 private nextId;
+
+    /// @notice Initializes the smart contract instead of a constructorr
     /// @param _factory univ3 factory
     /// @param _WETH wrapped ETH
     /// @param _KROM kromatika token
     /// @param _monitorGasUsage gas usage of the order monitor
-    function initialize(INonfungiblePositionManager _nonfungiblePositionManager,
-            IUniswapV3Factory _factory,
+    function initialize(IUniswapV3Factory _factory,
             IWETH9 _WETH,
             IERC20 _KROM,
             uint256 _monitorGasUsage) public initializer {
 
-        nonfungiblePositionManager = _nonfungiblePositionManager;
         factory = _factory;
         WETH = _WETH;
         KROM = _KROM;
 
         monitorGasUsage = _monitorGasUsage;
+        nextId = 1;
 
         OwnableUpgradeable.__Ownable_init();
+        ERC721Upgradeable.__ERC721_init("Kromatika Limit Position", "KROM-LM-POS");
     }
 
-    function openOrder(address _token0, address _token1, uint24 _fee, uint160 _sqrtPriceX96,
-        uint256 _amount0, uint256 _amount1, uint256 _targetGasPrice)
-        external payable returns (uint256 _tokenId) {
+    function placeLimitOrder(LimitOrderParams calldata params)
+        external payable override returns (
+            uint256 _tokenId
+        ) {
 
-        int24 _lowerTick;
-        int24 _upperTick;
+        int24 _tickLower;
+        int24 _tickUpper;
+        uint128 _liquidity;
+        uint128 _orderType;
+        IUniswapV3Pool _pool;
+
         {
 
-            address _poolAddress = factory.getPool(_token0, _token1, _fee);
-            require (_poolAddress != address(0), "POOL_NOT_FOUND");
+            PoolAddress.PoolKey memory _poolKey =
+            PoolAddress.PoolKey({
+                token0: params._token0, 
+                token1: params._token1, 
+                fee: params._fee
+            });
 
-            (_lowerTick, _upperTick) = calculateLimitTicks(
-                _poolAddress, _amount0, _amount1, _sqrtPriceX96
-            );
+            address _poolAddress = PoolAddress.computeAddress(address(factory), _poolKey);
+            require (_poolAddress != address(0));
+            _pool = IUniswapV3Pool(_poolAddress);
+
+            (_tickLower, _tickUpper, _liquidity, _orderType) = UniswapUtils.calculateLimitTicks(_pool, params);
+
+            if (_liquidity > 0) {
+                _pool.mint(
+                    address(this), 
+                    _tickLower, 
+                    _tickUpper, 
+                    _liquidity, 
+                    abi.encode(MintCallbackData({poolKey: _poolKey, payer: msg.sender}))
+                );
+            }
         }
 
-        (_tokenId,,_amount0,_amount1) = _mintNewPosition(
-            _token0, _token1, _amount0, _amount1, _lowerTick, _upperTick, _fee, msg.sender
-        );
+        _mint(msg.sender, (_tokenId = nextId++));
 
-        _createDeposit(
-            _tokenId, _token0, _token1, _amount0, _amount1, msg.sender, _targetGasPrice
+        _createLimitOrder(
+            _tokenId, _pool, params,
+            _tickLower, _tickUpper, _liquidity, _orderType, 
+            msg.sender
         );
     }
 
-    function closeOrder(uint256 _tokenId, uint256 _batchId) external override
-        returns (uint256 _amount0, uint256 _amount1) {
+    function processLimitOrder(uint256 _tokenId, uint256 _batchId) external override
+        returns (uint256 _amount0, uint256 _amount1, uint256 _serviceFeePaid) {
 
-        Deposit storage deposit = deposits[_tokenId];
-        require(msg.sender == address(deposit.monitor), "NOT_MONITOR");
-        require(deposit.closed == 0, "DEPOSIT_CLOSED");
+        LimitOrder storage limitOrder = limitOrders[_tokenId];
+        require(msg.sender == address(limitOrder.monitor));
+        require(limitOrder.processed == 0);
 
         // update the state
-        deposit.closed = block.number;
-        deposit.batchId = _batchId;
+        limitOrder.processed = block.number;
+        limitOrder.batchId = _batchId;
 
-        (_amount0, _amount1) = _removeLiquidity(_tokenId);
+        (_amount0, _amount1) = _removeLiquidity(
+            limitOrder.pool,
+            limitOrder.tickLower, 
+            limitOrder.tickUpper, 
+            limitOrder.liquidity
+        );
 
-        emit DepositClosed(deposit.owner, _tokenId);
+        // no liquidity for this position anymore
+        limitOrder.tokensOwed0 = _amount0;
+        limitOrder.tokensOwed1 = _amount1;
+        limitOrder.liquidity = 0;
+
+        // send the service fee to the monitor
+        _serviceFeePaid = quoteKROM(limitOrder.serviceFee);
+        limitOrder.serviceFeePaid = _serviceFeePaid;
+
+        // update balance
+        address _owner = ownerOf(_tokenId);
+        uint256 balance = funding[_owner];
+
+        // reduce balance
+        balance = balance.sub(_serviceFeePaid);
+        funding[_owner] = balance;
+
+        // reduce reservedWeiFunds
+        reservedWeiFunds[_owner] = reservedWeiFunds[_owner].sub(limitOrder.serviceFee);
+
+        TransferHelper.safeTransfer(
+            address(KROM), address(limitOrder.monitor), _serviceFeePaid
+        );
+
+        emit LimitOrderProcessed(msg.sender, _tokenId);
     }
 
 
-    function cancelOrder(uint256 _tokenId) external payable
+    function cancelLimitOrder(uint256 _tokenId) external
     returns (uint256 _amount0, uint256 _amount1) {
 
-        Deposit storage deposit = deposits[_tokenId];
-        require(deposit.closed == 0, "DEPOSIT_CLOSED");
-        require(deposit.owner == msg.sender, "NOT_OWNER");
+        isAuthorizedForToken(_tokenId);
+
+        LimitOrder storage limitOrder = limitOrders[_tokenId];
+        require(limitOrder.processed == 0);
 
         // update the state
-        deposit.closed = block.number;
+        limitOrder.processed = block.number;
 
         // remove liquidity
-        (_amount0, _amount1) = _removeLiquidity(_tokenId);
-        // stop monitor
-        deposit.monitor.stopMonitor(_tokenId);
-        // claim the funds
-        _claimOrderFunds(_tokenId);
+        (_amount0, _amount1) = _removeLiquidity(
+            limitOrder.pool,
+            limitOrder.tickLower, 
+            limitOrder.tickUpper, 
+            limitOrder.liquidity
+        );
 
-        emit DepositCancelled(deposit.owner, _tokenId);
+        limitOrder.tokensOwed0 = _amount0;
+        limitOrder.tokensOwed1 = _amount1;
+        limitOrder.liquidity = 0;
+
+        // stop monitor
+        limitOrder.monitor.stopMonitor(_tokenId);
+        // collect the funds
+        _collect(_tokenId, msg.sender);
+
+        emit LimitOrderCancelled(msg.sender, _tokenId);
     }
 
-    function claimOrderFunds(uint256 _tokenId) external {
+    function collect(uint256 _tokenId) external {
 
-        _claimOrderFunds(_tokenId);
+        isAuthorizedForToken(_tokenId);
+        _collect(_tokenId, msg.sender);
     }
 
     function addFunding(uint256 _amount) external {
@@ -206,77 +274,62 @@ contract LimitOrderManager is
         uint256 balance = funding[msg.sender];
         uint256 reservedKROM = quoteKROM(reservedWeiFunds[msg.sender]);
 
-        require(balance >= _amount, "NOT_ENOUGH_BALANCE");
         balance = balance.sub(_amount);
-        require(balance >= reservedKROM, "NOT_ENOUGH_RESERVES");
+        require(balance >= reservedKROM);
 
         funding[msg.sender] = balance;
         TransferHelper.safeTransfer(address(KROM), msg.sender, _amount);
         emit FundingWithdrawn(msg.sender, _amount);
     }
 
-    function retrieveToken(uint256 _tokenId) external {
+    function uniswapV3MintCallback(
+        uint256 amount0Owed,
+        uint256 amount1Owed,
+        bytes calldata data
+    ) external override {
+        MintCallbackData memory decoded = abi.decode(data, (MintCallbackData));
+        CallbackValidation.verifyCallback(address(factory), decoded.poolKey);
 
-        Deposit storage deposit = deposits[_tokenId];
-
-        // must be the owner of the deposit
-        require(msg.sender == deposit.owner, 'NOT_OWNER');
-        // must not be closed
-        require(deposit.closed == 0, "DEPOSIT_CLOSED");
-        // transfer ownership to original owner
-        nonfungiblePositionManager.safeTransferFrom(address(this), msg.sender, _tokenId);
-        // stop monitoring
-        deposit.monitor.stopMonitor(_tokenId);
-
-        // remove information related to tokenId
-        tokenIdsPerAddress[msg.sender] = removeElementFromArray(
-            deposit.ownerIndex, tokenIdsPerAddress[msg.sender]
-        );
-        reservedWeiFunds[deposit.owner] = reservedWeiFunds[deposit.owner].sub(deposit.serviceFee);
-        delete deposits[_tokenId];
+        _approveAndTransferToUniswap(msg.sender, decoded.poolKey.token0, amount0Owed, decoded.payer);
+        _approveAndTransferToUniswap(msg.sender, decoded.poolKey.token1, amount1Owed, decoded.payer);
     }
 
-    // Implementing `onERC721Received` so this contract can receive custody of erc721 tokens
-    function onERC721Received(
-        address _operator,
-        address,
-        uint256 _tokenId,
-        bytes calldata _data
-    ) external override returns (bytes4) {
+    function canProcess(uint256 _tokenId, uint256 _gasPrice) external view override returns (bool) {
 
-        uint256 _amount0;
-        uint256 _amount1;
-        address _token0;
-        address _token1;
+        LimitOrder storage limitOrder = limitOrders[_tokenId];
 
-        {
-
-            (, , address _t0, address _t1, uint24 _fee , int24 tickLower , int24 tickUpper , uint128 liquidity , , , , ) =
-            nonfungiblePositionManager.positions(_tokenId);
-
-            _token0 = _t0;
-            _token1 = _t1;
-
-            address _poolAddress = factory.getPool(_token0, _token1, _fee);
-            require (_poolAddress != address(0), "POOL_NOT_FOUND");
-
-            (_amount0, _amount1) = _amountsForLiquidity(
-                IUniswapV3Pool(_poolAddress), tickLower, tickUpper, liquidity
-            );
+        (bool underfunded,) = isUnderfunded(ownerOf(_tokenId));
+        if (underfunded || limitOrder.targetGasPrice < _gasPrice) {
+            return false;
         }
 
-        // only transfer custody of one-sided range liquidity
-        require(_amount0 == 0 || _amount1 == 0, "INVALID_TOKEN");
+        (uint256 amount0, uint256 amount1) =
+            UniswapUtils._amountsForLiquidity(
+                limitOrder.pool,
+                limitOrder.tickLower,
+                limitOrder.tickUpper,
+                limitOrder.liquidity
+            );
 
-        // create a deposit for the operator
-        _createDeposit(
-            _tokenId, _token0, _token1, _amount0, _amount1, _operator, abi.decode(_data, (uint256))
-        );
+        if (
+            limitOrder.tokensOwed0 == 0 && amount0 > 0 &&
+            limitOrder.tokensOwed1 > 0 && amount1 == 0
+        ) {
+            return true;
+        }
 
-        return this.onERC721Received.selector;
+        if (
+            limitOrder.tokensOwed0 > 0 && amount0 == 0 &&
+            limitOrder.tokensOwed1 == 0 && amount1 > 0
+        ) {
+            return true;
+        }
+
+        return false;
+    
     }
 
-    function isUnderfunded(address _owner) external view override returns (
+    function isUnderfunded(address _owner) public view returns (
         bool underfunded, uint256 amount
     ) {
         uint256 reservedKROM = quoteKROM(reservedWeiFunds[_owner]);
@@ -290,7 +343,7 @@ contract LimitOrderManager is
 
     function setMonitors(IOrderMonitor[] calldata _newMonitors) external onlyOwner {
 
-        require(_newMonitors.length > 0, "NO_MONITORS");
+        require(_newMonitors.length > 0);
         monitors = _newMonitors;
     }
 
@@ -299,17 +352,13 @@ contract LimitOrderManager is
         monitorGasUsage = _monitorGasUsage;
     }
 
-    function tokenIdsPerAddressLength(address user) external view returns (uint256) {
-        return tokenIdsPerAddress[user].length;
-    }
-
     function quoteKROM(uint256 _weiAmount) public view override returns (uint256 quote) {
 
         address _poolAddress = factory.getPool(address(WETH), address(KROM), POOL_FEE);
-        require(_poolAddress != address(0), "NO_KROM_POOL");
+        require(_poolAddress != address(0));
 
         if (_weiAmount > 0) {
-            // consult the pool in the last 5 min
+            // consult the pool in the last TWAP_PERIOD
             int24 timeWeightedAverageTick = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
             quote = OracleLibrary.getQuoteAtTick(
                 timeWeightedAverageTick, _toUint128(_weiAmount), address(WETH), address(KROM)
@@ -317,108 +366,104 @@ contract LimitOrderManager is
         }
     }
 
-    function calculateLimitTicks(address _poolAddress, uint256 _amount0, uint256 _amount1,
-        uint160 _sqrtPriceX96) public view
-    returns (int24 _lowerTick, int24 _upperTick) {
-
-        IUniswapV3Pool _pool = IUniswapV3Pool(_poolAddress);
-        int24 tickSpacing = _pool.tickSpacing();
-        (, int24 tick, , , , , ) = _pool.slot0();
-
-        int24 _targetTick = TickMath.getTickAtSqrtRatio(_sqrtPriceX96);
-        int24 tickFloor = _floor(_targetTick, tickSpacing);
-        int24 tickCeil = tickFloor + tickSpacing;
-
-        require(tick != _targetTick, "SAME_TICKS");
-
-        return _checkLiquidityRange(tickFloor - tickSpacing, tickFloor,
-            tickCeil, tickCeil + tickSpacing,
-            _amount0, _amount1,
-            _pool, tickSpacing);
-
-    }
-
     function estimateServiceFeeWei(uint256 _targetGasPrice) public view returns (uint256) {
+        // TODO improve the service fee estimation --> add margin
         return monitorGasUsage.mul(_targetGasPrice);
     }
 
-    function _createDeposit(uint256 _tokenId, address _token0, address _token1,
-        uint256 _amount0, uint256 _amount1, address _owner, uint256 _targetGasPrice) internal {
+    function _createLimitOrder(
+        uint256 _tokenId, IUniswapV3Pool _pool,
+        LimitOrderParams memory params,
+        int24 _tickLower, int24 _tickUpper, uint128 _liquidity, uint128 _orderType, 
+        address _owner) internal {
 
-        // first check the funding for the deposit
-        uint256 _serviceFeeWei = estimateServiceFeeWei(_targetGasPrice);
+        // first check the funding for the limitOrder
+        uint256 _serviceFeeWei = estimateServiceFeeWei(params._targetGasPrice);
         reservedWeiFunds[_owner] = reservedWeiFunds[_owner].add(_serviceFeeWei);
 
         IOrderMonitor _monitor = _selectMonitor();
-        tokenIdsPerAddress[_owner].push(_tokenId);
 
-        // Create a deposit
-        Deposit memory newDeposit = Deposit({
+        // Create a limitOrder
+        LimitOrder memory newLimitOrder = LimitOrder({
             tokenId: _tokenId,
-            opened: block.number,
-            token0: _token0,
-            token1: _token1,
-            closed: 0,
+            pool: _pool,
+            tickLower: _tickLower,
+            tickUpper: _tickUpper,
+            liquidity: _liquidity,
+            orderType: _orderType,
+            processed: 0,
             batchId: 0,
-            owner: _owner,
-            ownerIndex: tokenIdsPerAddress[_owner].length - 1,
             monitor: _monitor,
-            serviceFee: _serviceFeeWei
+            serviceFee: _serviceFeeWei,
+            serviceFeePaid: 0,
+            targetGasPrice: params._targetGasPrice,
+            tokensOwed0: params._amount0,
+            tokensOwed1: params._amount1
         });
 
-        deposits[_tokenId] = newDeposit;
+        limitOrders[_tokenId] = newLimitOrder;
 
-        _monitor.startMonitor(_tokenId, _amount0, _amount1, _targetGasPrice, _owner);
+        _monitor.startMonitor(_tokenId);
 
-        emit DepositCreated(_owner, _tokenId);
+        emit LimitOrderCreated(_owner, _tokenId);
 
     }
 
-    function _claimOrderFunds(uint256 _tokenId) internal {
+    function _collect(uint256 _tokenId, address _owner) internal returns 
+        (uint256 _tokensToSend0, uint256 _tokensToSend1) {
 
-        Deposit storage deposit = deposits[_tokenId];
-        require(deposit.closed > 0, "DEPOSIT_NOT_CLOSED");
+        LimitOrder storage limitOrder = limitOrders[_tokenId];
+        require(limitOrder.processed > 0);
 
-        uint256 balance = funding[deposit.owner];
-        (uint256 payment, address creator) = deposit.monitor.batchInfo(deposit.batchId);
-        require(balance > 0 && payment <= balance, "NO_FUNDING");
+        // TODO hidden gem, collect the liquidity fees for all pools
 
-        balance = balance.sub(payment);
-        funding[deposit.owner] = balance;
-        reservedWeiFunds[deposit.owner] = reservedWeiFunds[deposit.owner].sub(deposit.serviceFee);
+        (_tokensToSend0, _tokensToSend1) =
+            limitOrder.pool.collect(
+                address(this),
+                limitOrder.tickLower,
+                limitOrder.tickUpper,
+                _toUint128(limitOrder.tokensOwed0),
+                _toUint128(limitOrder.tokensOwed1)
+            );
 
-        INonfungiblePositionManager.CollectParams memory collectParams =
-        INonfungiblePositionManager.CollectParams({
-            tokenId: _tokenId,
-            recipient: address(this),
-            amount0Max: type(uint128).max,
-            amount1Max: type(uint128).max
-        });
+        require(_tokensToSend0 > 0 || _tokensToSend1 > 0);
 
-        // collect everything
-        (uint256 _tokensToSend0, uint256 _tokensToSend1) = nonfungiblePositionManager.collect(collectParams);
-        require(_tokensToSend0 > 0 || _tokensToSend1 > 0, "NO_TOKENS_OWED");
+        // refund KROM
+        uint256 payment = limitOrder.monitor.batchPayment(
+            limitOrder.batchId
+        );
 
-        // close the position ; TODO maybe avoid this
-        nonfungiblePositionManager.burn(_tokenId);
+        if (limitOrder.serviceFeePaid > payment) {
 
-        _transferToOwner(deposit.token0, _tokensToSend0, deposit.owner);
-        _transferToOwner(deposit.token1, _tokensToSend1, deposit.owner);
-        _transferFees(payment, creator, address(deposit.monitor));
+            uint256 balance = funding[_owner];
+            uint256 _amountToTopUp = limitOrder.serviceFeePaid.sub(payment);
+
+            balance = balance.add(_amountToTopUp);
+            funding[_owner] = balance;
+
+            // top-up from the monitor
+            TransferHelper.safeTransferFrom(
+                address(KROM),
+                address(limitOrder.monitor),
+                address(this),
+                _amountToTopUp
+            );
+        }
+
+        _transferToOwner(limitOrder.pool.token0(), _tokensToSend0, _owner);
+        _transferToOwner(limitOrder.pool.token1(), _tokensToSend1, _owner);
 
         // remove information related to tokenId
-        tokenIdsPerAddress[deposit.owner] = removeElementFromArray(
-            deposit.ownerIndex, tokenIdsPerAddress[deposit.owner]
-        );
-        delete deposits[_tokenId];
+        delete limitOrders[_tokenId];
+        _burn(_tokenId);
 
-        emit DepositClaimed(msg.sender, _tokenId, _tokensToSend0, _tokensToSend1, payment);
+        emit LimitOrderCollected(_owner, _tokenId, _tokensToSend0, _tokensToSend1, payment);
     }
 
     function _selectMonitor() internal returns (IOrderMonitor _monitor) {
 
         uint256 monitorLength = monitors.length;
-        require(monitorLength > 0, "NO_MONITORS");
+        require(monitorLength > 0);
 
         uint256 _selectedIndex = nextMonitor == monitorLength
             ? 0
@@ -428,162 +473,26 @@ contract LimitOrderManager is
         nextMonitor = _selectedIndex.add(1);
     }
 
-    function _checkLiquidityRange(int24 _bidLower, int24 _bidUpper,
-        int24 _askLower, int24 _askUpper,
-        uint256 _amount0, uint256 _amount1,
-        IUniswapV3Pool _pool, int24 _tickSpacing) internal view
-    returns (int24 _lowerTick, int24 _upperTick) {
-
-        _checkRange(_bidLower, _bidUpper, _tickSpacing);
-        _checkRange(_askLower, _askUpper, _tickSpacing);
-
-        uint128 bidLiquidity = _liquidityForAmounts(_pool, _bidLower, _bidUpper, _amount0, _amount1);
-        uint128 askLiquidity = _liquidityForAmounts(_pool, _askLower, _askUpper, _amount0, _amount1);
-
-        require(bidLiquidity > 0 || askLiquidity > 0, "INVALID_LIMIT_ORDER");
-
-        if (bidLiquidity > askLiquidity) {
-            (_lowerTick, _upperTick) = (_bidLower, _bidUpper);
-        } else {
-            (_lowerTick, _upperTick) = (_askLower, _askUpper);
-        }
-    }
-
-    /// @dev Wrapper around `LiquidityAmounts.getLiquidityForAmounts()`.
-    function _liquidityForAmounts(
-        IUniswapV3Pool pool,
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 amount0,
-        uint256 amount1
-    ) internal view returns (uint128) {
-        (uint160 sqrtRatioX96, , , , , , ) = pool.slot0();
-        return
-        LiquidityAmounts.getLiquidityForAmounts(
-            sqrtRatioX96,
-            TickMath.getSqrtRatioAtTick(tickLower),
-            TickMath.getSqrtRatioAtTick(tickUpper),
-            amount0,
-            amount1
-        );
-    }
-
-    /// @dev Wrapper around `LiquidityAmounts.getAmountsForLiquidity()`.
-    function _amountsForLiquidity(
-        IUniswapV3Pool pool,
-        int24 tickLower,
-        int24 tickUpper,
-        uint128 liquidity
-    ) internal view returns (uint256, uint256) {
-        (uint160 sqrtRatioX96, , , , , , ) = pool.slot0();
-        return
-        LiquidityAmounts.getAmountsForLiquidity(
-            sqrtRatioX96,
-            TickMath.getSqrtRatioAtTick(tickLower),
-            TickMath.getSqrtRatioAtTick(tickUpper),
-            liquidity
-        );
-    }
-
-    function _checkRange(int24 _tickLower, int24 _tickUpper, int24 _tickSpacing) internal pure {
-        require(_tickLower < _tickUpper, "tickLower < tickUpper");
-        require(_tickLower >= TickMath.MIN_TICK, "tickLower too low");
-        require(_tickUpper <= TickMath.MAX_TICK, "tickUpper too high");
-        require(_tickLower % _tickSpacing == 0, "tickLower % tickSpacing");
-        require(_tickUpper % _tickSpacing == 0, "tickUpper % tickSpacing");
-    }
-
     /// @dev Casts uint256 to uint128 with overflow check.
     function _toUint128(uint256 x) internal pure returns (uint128) {
         assert(x <= type(uint128).max);
         return uint128(x);
     }
 
-    /// @dev Rounds tick down towards negative infinity so that it's a multiple
-    /// of `tickSpacing`.
-    function _floor(int24 tick, int24 _tickSpacing) internal pure returns (int24) {
-        int24 compressed = tick / _tickSpacing;
-        if (tick < 0 && tick % _tickSpacing != 0) compressed--;
-        return compressed * _tickSpacing;
-    }
-
-    /// @notice Removes index element from the given array.
-    /// @param  index index to remove from the array
-    /// @param  array the array itself
-    function removeElementFromArray(uint256 index, uint256[] storage array) private returns (uint256[] memory) {
-        if (index == array.length - 1) {
-            array.pop();
-        } else {
-            array[index] = array[array.length - 1];
-            array.pop();
-        }
-        return array;
-    }
-
-    function _mintNewPosition(address _token0, address _token1, uint256 _amount0, uint256 _amount1,
-        int24 _lowerTick, int24 _upperTick,
-        uint24 _fee,
-        address _owner)
-    private
-    returns (
-        uint256 tokenId,
-        uint128 liquidity,
-        uint256 amount0,
-        uint256 amount1
-    ) {
-
-        _approveAndTransferToUniswap(_token0, _amount0, _owner);
-        _approveAndTransferToUniswap(_token1, _amount1, _owner);
-
-        INonfungiblePositionManager.MintParams memory mintParams =
-        INonfungiblePositionManager.MintParams({
-            token0: _token0,
-            token1: _token1,
-            fee: _fee,
-            tickLower: _lowerTick,
-            tickUpper: _upperTick,
-            amount0Desired: _amount0,
-            amount1Desired: _amount1,
-            amount0Min: 0,
-            amount1Min: 0,
-            recipient: address(this),
-            deadline: block.timestamp.add(LIQUIDITY_DEADLINE)
-        });
-
-        (tokenId,liquidity,amount0,amount1) = nonfungiblePositionManager.mint(mintParams);
-
-        // Remove allowance and refund in both assets.
-        if (amount0 < _amount0) {
-            _removeAllowanceAndRefund(_token0, _amount0.sub(amount0), _owner);
-        }
-
-        if (amount1 < _amount1) {
-            _removeAllowanceAndRefund(_token1, _amount1.sub(amount1), _owner);
-        }
-    }
-
     /// @dev Approve transfer to position manager
-    function _approveAndTransferToUniswap(address _token, uint256 _amount, address _owner) private {
+    function _approveAndTransferToUniswap(address _recipient, 
+        address _token, uint256 _amount, address _owner) private {
 
         if (_amount > 0) {
             // transfer tokens to contract
             if (_token == address(WETH)) {
                 // if _token is WETH --> wrap it first
                 WETH.deposit{value: _amount}();
+                WETH.transfer(_recipient, _amount);
             } else {
-                TransferHelper.safeTransferFrom(_token, _owner, address(this), _amount);
+                TransferHelper.safeTransferFrom(_token, _owner, _recipient, _amount);
             }
-
-            // Approve the position manager
-            TransferHelper.safeApprove(_token, address(nonfungiblePositionManager), _amount);
         }
-    }
-
-    /// @dev Remove allowance and refund
-    function _removeAllowanceAndRefund(address _token, uint256 _amount, address _owner) private {
-
-        TransferHelper.safeApprove(_token, address(nonfungiblePositionManager), 0);
-        _transferToOwner(_token, _amount, _owner);
     }
 
     function _transferToOwner(address _token, uint256 _amount, address _owner) private {
@@ -598,31 +507,26 @@ contract LimitOrderManager is
         }
     }
 
-    function _transferFees(uint256 _amount, address _owner, address) internal virtual {
-        if (_amount > 0) {
-            TransferHelper.safeTransfer(address(KROM), _owner, _amount);
-        }
-    }
 
-    function _removeLiquidity(uint256 _tokenId)
+    function _removeLiquidity(
+        IUniswapV3Pool pool,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity
+    )
     internal
     returns (
         uint256 amount0,
         uint256 amount1
     ) {
 
-        (,,,,,,,uint128 _liquidity,,,,) = nonfungiblePositionManager.positions(_tokenId);
+        if (liquidity > 0) {
+            (amount0, amount1) = pool.burn(tickLower, tickUpper, liquidity);
+        }
+    }
 
-        INonfungiblePositionManager.DecreaseLiquidityParams memory removeParams =
-            INonfungiblePositionManager.DecreaseLiquidityParams({
-                tokenId: _tokenId,
-                liquidity: _liquidity,
-                amount0Min: 0,
-                amount1Min: 0,
-                deadline: block.timestamp.add(LIQUIDITY_DEADLINE)
-        });
-
-        (amount0, amount1) = nonfungiblePositionManager.decreaseLiquidity(removeParams);
+    function isAuthorizedForToken(uint256 tokenId) internal view {
+        require(_isApprovedOrOwner(msg.sender, tokenId));
     }
 
     // Function to receive Ether. msg.data must be empty

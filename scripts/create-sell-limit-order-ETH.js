@@ -1,5 +1,6 @@
 const LimitOrderManager = artifacts.require("LimitOrderManager");
 const ERC20 = artifacts.require("ERC20");
+const Kromatika = artifacts.require("Kromatika");
 
 const JSBI = require('jsbi');
 
@@ -22,7 +23,7 @@ module.exports = async(callback) => {
 
         // kovan addresses
         // const token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
-        let token1 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // XLN
+        let token1 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
 
         let token0Instance = await ERC20.at(token0);
         let token1Instance = await ERC20.at(token1);
@@ -33,16 +34,12 @@ module.exports = async(callback) => {
         let amount1 = new BN((0 * 10 ** token1Decimals).toString());
         const margin = new BN(5);
 
-        // //mainnet
-        //const fee = 3000;
-
-        //kovan
-        const fee = 500;
+        const fee = 3000;
 
         // // target price: 1 ETH = 3800 DAI --> sell ETH for DAI MAINNET
-        let sellTokenPrice = "3800"; // token1 price of token0
+        let sellTokenPrice = "2487"; // token1 price of token0
 
-        let targetGasPrice = web3.utils.toWei("1", "gwei");
+        let targetGasPrice = web3.utils.toWei("10", "gwei");
 
         // sort tokens
         [token0, token1, amount0, amount1, sellTokenPrice] = sortTokens(token0, token1, amount0, amount1, sellTokenPrice);
@@ -61,10 +58,7 @@ module.exports = async(callback) => {
 
         [token0, token1, amount0, amount1, sellTokenPrice] = sortTokens(token0, token1, amount0, amount1, sellTokenPrice);
 
-
-        // calculate the monitoring deposit
-        const monitorGasUsage = await tradeInstance.monitorGasUsage();
-        let msgValue = targetGasPrice * monitorGasUsage;
+        let msgValue = 0;
         if (token0 == process.env.WETH && amount0 > 0) {
             msgValue = amount0.add(new BN(msgValue.toString()))
         }
@@ -76,19 +70,21 @@ module.exports = async(callback) => {
         console.log("Token1 --> " + token1.toString());
         console.log("Fee --> " + fee.toString());
         console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
-        console.log("Amount0 --> " + amount0.toString(16));
+        console.log("Amount0 --> " + amount0.toString());
         console.log("Amount1 --> " + amount1.toString());
-        console.log("targetGasPrice --> " +  targetGasPrice.toString(16));
-        console.log("Deposit --> " +  msgValue.toString(16));
+        console.log("targetGasPrice --> " +  targetGasPrice.toString());
+        console.log("Deposit --> " +  msgValue.toString());
 
-        const receipt = await tradeInstance.openOrder(
+        targetSqrtPriceX96 = new BN(targetSqrtPriceX96.toString());
+
+        const receipt = await tradeInstance.placeLimitOrder([
             token0,
             token1,
             fee,
-            new BN(targetSqrtPriceX96.toString()),
+            targetSqrtPriceX96,
             amount0,
             amount1,
-            targetGasPrice,
+            targetGasPrice],
             {value: msgValue, from: currentAccount}
         );
         console.log('receipt:', receipt);

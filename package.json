@@ -40,7 +40,8 @@
     "jsbi": "^3.2.5",
     "logops": "^2.1.1",
     "solhint": "^3.3.6",
-    "truffle": "^5.4.3"
+    "truffle": "^5.4.3",
+    "truffle-contract-size": "^2.0.1"
   },
   "devDependencies": {
     "@openzeppelin/truffle-upgrades": "^1.9.1",

@@ -1,6 +1,4 @@
 const LimitOrderManager = artifacts.require("LimitOrderManager");
-const INonfungiblePositionManager = artifacts.require("INonfungiblePositionManager");
-const IUniswapV3Factory = artifacts.require("IUniswapV3Factory");
 const IUniswapV3Pool = artifacts.require("IUniswapV3Pool");
 
 const JSBI = require('jsbi');
@@ -15,42 +13,35 @@ const MaxUint256 = JSBI.BigInt('0xffffffffffffffffffffffffffffffffffffffffffffff
 
 module.exports = async(callback) => {
 
-    const positionManager = process.env.UNISWAP_POSITION_MANAGER;
-    const uniswapFactory = process.env.UNISWAP_FACTORY;
-
     try {
 
         const accounts = await web3.eth.getAccounts();
         const currentAccount = accounts[0];
 
         const tradeInstance = await LimitOrderManager.deployed();
-
-        const tokenIdsCount = await tradeInstance.tokenIdsPerAddressLength(currentAccount);
+        const tokenIdsCount = await tradeInstance.balanceOf(currentAccount);
 
         for (let i=0; i< tokenIdsCount; i++) {
 
             console.log("=================================================");
-            const tokenId = await tradeInstance.tokenIdsPerAddress(currentAccount, i);
-            const depositInfo = await tradeInstance.deposits(tokenId);
+            const tokenId = await tradeInstance.tokenOfOwnerByIndex(currentAccount, i);
+            const orderInfo = await tradeInstance.limitOrders(tokenId);
 
-            console.log("TokenID: " + depositInfo.tokenId);
+            console.log("TokenID: " + tokenId);
 
-            if (depositInfo.closed == 0) {
+            if (orderInfo.processed == 0) {
                 // get token id info from univ3
-                const positionManagerInstance = await INonfungiblePositionManager.at(positionManager);
-                const position = await positionManagerInstance.positions(tokenId);
                 console.log("Position LowerLimit: " + decodeSqrtRatioX96(
-                    getSqrtRatioAtTick(position.tickLower)).toString()
+                    getSqrtRatioAtTick(orderInfo.tickLower)).toString()
                 );
                 console.log("Position UpperLimit: " + decodeSqrtRatioX96(
-                    getSqrtRatioAtTick(position.tickUpper)).toString()
+                    getSqrtRatioAtTick(orderInfo.tickUpper)).toString()
                 );
 
-                console.log(JSON.stringify(position));
+                console.log(JSON.stringify(orderInfo));
 
                 // get current pool position info
-                const uniswapFactoryInstance = await IUniswapV3Factory.at(uniswapFactory);
-                const poolAddress = await uniswapFactoryInstance.getPool(position.token0, position.token1, position.fee);
+                const poolAddress = orderInfo.pool;
                 const poolInstance = await IUniswapV3Pool.at(poolAddress);
 
                 const poolInfo = await poolInstance.slot0();

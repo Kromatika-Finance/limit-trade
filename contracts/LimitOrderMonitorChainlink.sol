@@ -3,45 +3,59 @@
 pragma solidity >=0.7.5;
 pragma abicoder v2;
 
-import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
-
 import "@chainlink/contracts/src/v0.7/interfaces/KeeperRegistryInterface.sol";
 
-import "./LimitOrderManager.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 
-/// @title  LimitOrderManagerChainlink
-contract LimitOrderManagerChainlink is LimitOrderManager {
+import "./LimitOrderMonitor.sol";
+
+/// @title  LimitOrderMonitorChainlink
+contract LimitOrderMonitorChainlink is LimitOrderMonitor {
+
+    uint24 public constant POOL_FEE = 3000;
 
     /// @dev swap router
     ISwapRouter public swapRouter;
 
+    /// @dev wrapper ETH
+    IWETH9 public WETH;
+
     /// @dev link token address
     IERC20 public LINK;
 
-    /// @dev monitor to keeper id mapping
-    mapping (address => uint256) public keeperIdPerMonitor;
+    /// @dev monitor keeperID
+    uint256 public keeperId;
 
-    function initialize(INonfungiblePositionManager _nonfungiblePositionManager,
+    function initialize(IOrderManager _orderManager,
         IUniswapV3Factory _factory,
-        IWETH9 _WETH,
         IERC20 _KROM,
-        uint256 _monitorGasUsage,
+        uint256 _batchSize,
+        uint256 _monitorSize,
+        uint256 _upkeepInterval,
+        uint256 _monitorFee,
         ISwapRouter _swapRouter,
+        IWETH9 _WETH,
         IERC20 _LINK) public initializer {
 
-        super.initialize(_nonfungiblePositionManager, _factory, _WETH, _KROM, _monitorGasUsage);
+        super.initialize(
+            _orderManager, _factory, _KROM, _batchSize, _monitorSize, _upkeepInterval, _monitorFee
+        );
+
         swapRouter = _swapRouter;
         LINK = _LINK;
+        WETH = _WETH;
     }
 
-    function setKeeperIdPerMonitor(address _monitor, uint256 _keeperId) external onlyOwner {
+    function setKeeperId(uint256 _keeperId) external onlyOwner {
 
-        keeperIdPerMonitor[_monitor] = _keeperId;
+        keeperId = _keeperId;
     }
 
-    function _transferFees(uint256 _amount, address _owner, address _monitor) override virtual internal {
+    function _transferFees(uint256 _amount, address _owner) internal virtual override  {
+
         if (_amount > 0) {
-            require(keeperIdPerMonitor[_monitor] > 0, "ERR_NO_KEEPER");
+            require(keeperId > 0);
             // swap KROM into LINKs
             TransferHelper.safeApprove(address(KROM), address(swapRouter), _amount);
 
@@ -58,7 +72,7 @@ contract LimitOrderManagerChainlink is LimitOrderManager {
             _amount = swapRouter.exactInput(params);
 
             TransferHelper.safeApprove(address(LINK), _owner, _amount);
-            KeeperRegistryInterface(_owner).addFunds(keeperIdPerMonitor[_monitor], uint96(_amount));
+            KeeperRegistryInterface(_owner).addFunds(keeperId, uint96(_amount));
         }
     }
 }

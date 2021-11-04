@@ -1,5 +1,6 @@
 const LimitOrderManager = artifacts.require("LimitOrderManager");
 const ERC20 = artifacts.require("ERC20");
+const Kromatika = artifacts.require("Kromatika");
 
 const JSBI = require('jsbi');
 
@@ -69,7 +70,7 @@ module.exports = async(callback) => {
                 {from: currentAccount}
                 );
 
-            console.log((await token0Instance.allowance(currentAccount, tradeInstance.address)).toString());
+            console.log('Allowance: ' + (await token0Instance.allowance(currentAccount, tradeInstance.address)).toString());
         }
 
         if (amount1 > 0) {
@@ -79,20 +80,33 @@ module.exports = async(callback) => {
                 {from: currentAccount}
             );
 
-            console.log((await token1Instance.allowance(currentAccount, tradeInstance.address)).toString());
+            console.log('Allowance: ' + (await token1Instance.allowance(currentAccount, tradeInstance.address)).toString());
         }
 
         // calculate the monitoring deposit
-        const monitorGasUsage = await tradeInstance.monitorGasUsage();
-        const msgValue = targetGasPrice * monitorGasUsage;
+        const estimatedServiceFee = await tradeInstance.estimateServiceFeeWei(targetGasPrice);
+        const serviceFee = await tradeInstance.quoteKROM.call(estimatedServiceFee);
 
+        console.log("Estimated service fee --> " + web3.utils.fromWei(serviceFee.toString()));
+        const funding = await tradeInstance.funding(currentAccount);
+        if (serviceFee > funding) {
+            const kromatika = await Kromatika.deployed();
+            await kromatika.approve(
+                tradeInstance.address,
+                serviceFee,
+                {from: currentAccount}
+            );
+            await tradeInstance.addFunding(serviceFee);
+        }
+
+
+        console.log("Funding --> " + web3.utils.fromWei(funding.toString()));
         console.log("Token0 --> " + token0.toString());
         console.log("Token1 --> " + token1.toString());
         console.log("Amount0 --> " + amount0.toString(16));
         console.log("Amount1 --> " + amount1.toString());
         console.log("TargetSqrtPriceX96 --> " + targetSqrtPriceX96.toString());
         console.log("Fee --> " + fee.toString());
-        console.log("Deposit --> " +  msgValue.toString(16));
         console.log("targetGasPrice --> " +  targetGasPrice.toString(16));
 
         const receipt = await tradeInstance.openOrder(
@@ -103,7 +117,7 @@ module.exports = async(callback) => {
             amount0,
             amount1,
             targetGasPrice,
-            {value: msgValue, from: currentAccount}
+            {from: currentAccount}
         );
         console.log('receipt:', receipt);
 

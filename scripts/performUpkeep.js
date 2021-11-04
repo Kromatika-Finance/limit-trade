@@ -1,9 +1,7 @@
-const LimitOrderMonitor = artifacts.require("LimitOrderMonitor");
+const LimitOrderMonitor = artifacts.require("LimitOrderMonitorChainlink");
+const LimitOrderManager = artifacts.require("LimitOrderManager");
 
 module.exports = async(callback) => {
-
-    const positionManager = process.env.UNISWAP_POSITION_MANAGER;
-    const uniswapFactory = process.env.UNISWAP_FACTORY;
 
     try {
 
@@ -11,13 +9,22 @@ module.exports = async(callback) => {
         const currentAccount = accounts[0];
 
         const limitMonitor = await LimitOrderMonitor.deployed();
+        const limitManager = await LimitOrderManager.deployed();
 
-        const receipt = await limitMonitor.checkUpkeep.call('0x');
+        const targetGasPrice = web3.utils.toWei("2.5", "gwei");
+
+        const canProcess = await limitManager.canProcess("2", targetGasPrice);
+        console.log(canProcess);
+
+        const isUnderfunded = await limitManager.isUnderfunded(currentAccount);
+        console.log(JSON.stringify(isUnderfunded));
+
+        const receipt = await limitMonitor.checkUpkeep.call('0x', {gasPrice: targetGasPrice});
         console.log('receipt:', receipt.upkeepNeeded);
-        if (receipt.upkeepNeeded) {
-            const performUpkeep = await limitMonitor.performUpkeep(receipt.performData);
-            console.log('performUpkeep:', performUpkeep);
-        }
+        // if (receipt.upkeepNeeded) {
+        //     const performUpkeep = await limitMonitor.performUpkeep(receipt.performData, {gasPrice: targetGasPrice});
+        //     console.log('performUpkeep:', performUpkeep);
+        // }
 
     } catch (error) {
         console.log(error);

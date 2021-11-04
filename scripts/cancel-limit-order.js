@@ -10,9 +10,9 @@ module.exports = async(callback) => {
 
         const tradeInstance = await LimitOrderManager.deployed();
 
-        const tokenId = "142675";
+        const tokenId = "3";
 
-        const receipt = await tradeInstance.cancelOrder(
+        const receipt = await tradeInstance.cancelLimitOrder(
             tokenId,
             {from: currentAccount}
         );

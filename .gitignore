@@ -86,3 +86,5 @@ typings/
 package-lock.json
 yarn.lock
 build
+bin
+.history
