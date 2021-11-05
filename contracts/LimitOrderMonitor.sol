@@ -25,7 +25,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     uint256 private constant MAX_BATCH_SIZE = 100;
     uint256 private constant MAX_MONITOR_SIZE = 10000;
 
-    uint256 private constant MONITOR_OVERHEAD = 100000;
+    uint256 private constant MONITOR_OVERHEAD = 300000;
 
     event BatchProcessed(uint256 batchId, uint256 batchSize, uint256 gasUsed,
         uint256 paymentOwed, uint256 paymentPaid, bytes data);

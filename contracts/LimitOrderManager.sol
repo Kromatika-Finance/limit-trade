@@ -40,7 +40,7 @@ contract LimitOrderManager is
         int24 tickLower;
         int24 tickUpper;
         uint128 liquidity;
-        uint128 orderType;
+        uint256 opened;
         uint256 processed;
         uint256 batchId;
         IOrderMonitor monitor;
@@ -63,14 +63,16 @@ contract LimitOrderManager is
 
     uint32 public constant TWAP_PERIOD = 60;
 
-    /// @dev fired when a new limitOrder is made
-    event LimitOrderCreated(address indexed owner, uint256 indexed tokenId);
+    /// @dev fired when a new limitOrder is placed
+    event LimitOrderCreated(address indexed owner, uint256 indexed tokenId,
+        uint128 orderType, uint160 sqrtPriceX96, uint256 amount0, uint256 amount1);
 
     /// @dev fired when a an order is processed
-    event LimitOrderProcessed(address indexed owner, uint256 indexed tokenId);
+    event LimitOrderProcessed(address indexed monitor, uint256 indexed tokenId,
+        uint256 batchId, uint256 serviceFeePaid);
 
     /// @dev fired when an order is cancelled
-    event LimitOrderCancelled(address indexed owner, uint256 indexed tokenId);
+    event LimitOrderCancelled(address indexed owner, uint256 indexed tokenId, uint256 amount0, uint256 amount1);
 
     /// @dev fired when an order is collected
     event LimitOrderCollected(address indexed owner, uint256 indexed tokenId,
@@ -89,7 +91,7 @@ contract LimitOrderManager is
     mapping(address => uint256) public reservedWeiFunds;
 
     /// @dev limitOrders per token id
-    mapping (uint256 => LimitOrder) public limitOrders;
+    mapping (uint256 => LimitOrder) private limitOrders;
 
     /// @dev monitor pool
     IOrderMonitor[] public monitors;
@@ -187,7 +189,7 @@ contract LimitOrderManager is
         require(limitOrder.processed == 0);
 
         // update the state
-        limitOrder.processed = block.number;
+        limitOrder.processed = _blockNumber();
         limitOrder.batchId = _batchId;
 
         (_amount0, _amount1) = _removeLiquidity(
@@ -218,10 +220,10 @@ contract LimitOrderManager is
         reservedWeiFunds[_owner] = reservedWeiFunds[_owner].sub(limitOrder.serviceFee);
 
         TransferHelper.safeTransfer(
-            address(KROM), address(limitOrder.monitor), _serviceFeePaid
+            address(KROM), msg.sender, _serviceFeePaid
         );
 
-        emit LimitOrderProcessed(msg.sender, _tokenId);
+        emit LimitOrderProcessed(msg.sender, _tokenId, _batchId, _serviceFeePaid);
     }
 
 
@@ -234,7 +236,7 @@ contract LimitOrderManager is
         require(limitOrder.processed == 0);
 
         // update the state
-        limitOrder.processed = block.number;
+        limitOrder.processed = _blockNumber();
 
         // remove liquidity
         (_amount0, _amount1) = _removeLiquidity(
@@ -253,7 +255,7 @@ contract LimitOrderManager is
         // collect the funds
         _collect(_tokenId, msg.sender);
 
-        emit LimitOrderCancelled(msg.sender, _tokenId);
+        emit LimitOrderCancelled(msg.sender, _tokenId, _amount0, _amount1);
     }
 
     function collect(uint256 _tokenId) external {
@@ -292,6 +294,42 @@ contract LimitOrderManager is
 
         _approveAndTransferToUniswap(msg.sender, decoded.poolKey.token0, amount0Owed, decoded.payer);
         _approveAndTransferToUniswap(msg.sender, decoded.poolKey.token1, amount1Owed, decoded.payer);
+    }
+
+    function orders(uint256 tokenId)
+    external
+    view
+    returns (
+        address owner,
+        address token0,
+        address token1,
+        uint24 fee,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity,
+        uint256 opened,
+        uint256 processed,
+        uint256 targetGasPrice,
+        uint256 tokensOwed0,
+        uint256 tokensOwed1
+    )
+    {
+        LimitOrder memory limitOrder = limitOrders[tokenId];
+        require(address(limitOrder.pool) != address(0));
+        return (
+            ownerOf(tokenId),
+            limitOrder.pool.token0(),
+            limitOrder.pool.token1(),
+            limitOrder.pool.fee(),
+            limitOrder.tickLower,
+            limitOrder.tickUpper,
+            limitOrder.liquidity,
+            limitOrder.opened,
+            limitOrder.processed,
+            limitOrder.targetGasPrice,
+            limitOrder.tokensOwed0,
+            limitOrder.tokensOwed1
+        );
     }
 
     function canProcess(uint256 _tokenId, uint256 _gasPrice) external view override returns (bool) {
@@ -390,7 +428,7 @@ contract LimitOrderManager is
             tickLower: _tickLower,
             tickUpper: _tickUpper,
             liquidity: _liquidity,
-            orderType: _orderType,
+            opened: _blockNumber(),
             processed: 0,
             batchId: 0,
             monitor: _monitor,
@@ -405,7 +443,14 @@ contract LimitOrderManager is
 
         _monitor.startMonitor(_tokenId);
 
-        emit LimitOrderCreated(_owner, _tokenId);
+        emit LimitOrderCreated(
+            _owner,
+            _tokenId,
+            _orderType,
+            params._sqrtPriceX96,
+            params._amount0,
+            params._amount1
+        );
 
     }
 
@@ -523,6 +568,10 @@ contract LimitOrderManager is
         if (liquidity > 0) {
             (amount0, amount1) = pool.burn(tickLower, tickUpper, liquidity);
         }
+    }
+
+    function _blockNumber() internal view returns (uint256) {
+        return block.number;
     }
 
     function isAuthorizedForToken(uint256 tokenId) internal view {

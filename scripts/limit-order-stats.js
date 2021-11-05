@@ -25,9 +25,11 @@ module.exports = async(callback) => {
 
             console.log("=================================================");
             const tokenId = await tradeInstance.tokenOfOwnerByIndex(currentAccount, i);
-            const orderInfo = await tradeInstance.limitOrders(tokenId);
+            const orderInfo = await tradeInstance.orders(tokenId);
 
             console.log("TokenID: " + tokenId);
+
+            console.log(JSON.stringify(orderInfo));
 
             if (orderInfo.processed == 0) {
                 // get token id info from univ3
@@ -39,18 +41,6 @@ module.exports = async(callback) => {
                 );
 
                 console.log(JSON.stringify(orderInfo));
-
-                // get current pool position info
-                const poolAddress = orderInfo.pool;
-                const poolInstance = await IUniswapV3Pool.at(poolAddress);
-
-                const poolInfo = await poolInstance.slot0();
-                const decodedPrice = decodeSqrtRatioX96(
-                    JSBI.BigInt(poolInfo.sqrtPriceX96.toString())
-                );
-
-                console.log(JSON.stringify(poolInfo));
-                console.log("Pool CurrentPrice: " + decodedPrice.toString());
 
             }
         }
