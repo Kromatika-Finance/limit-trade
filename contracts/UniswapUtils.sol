@@ -13,9 +13,14 @@ import "@uniswap/v3-periphery/contracts/libraries/PositionKey.sol";
 import "@uniswap/v3-periphery/contracts/libraries/CallbackValidation.sol";
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
+import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
 import "./interfaces/IOrderManager.sol";
 
 library UniswapUtils {
+
+    uint24 public constant POOL_FEE = 3000;
+
+    uint32 public constant TWAP_PERIOD = 20;
 
     function calculateLimitTicks(
         IUniswapV3Pool _pool, IOrderManager.LimitOrderParams memory params) external view
@@ -47,10 +52,25 @@ library UniswapUtils {
 
     }
 
+    function quoteKROM(IUniswapV3Factory factory, address WETH, address KROM, uint256 _weiAmount)
+    public view returns (uint256 quote) {
+
+        address _poolAddress = factory.getPool(WETH, KROM, POOL_FEE);
+        require(_poolAddress != address(0));
+
+        if (_weiAmount > 0) {
+            // consult the pool in the last TWAP_PERIOD
+            int24 timeWeightedAverageTick = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
+            quote = OracleLibrary.getQuoteAtTick(
+                timeWeightedAverageTick, _toUint128(_weiAmount), WETH, KROM
+            );
+        }
+    }
+
     function _checkLiquidityRange(int24 _bidLower, int24 _bidUpper,
         int24 _askLower, int24 _askUpper,
         uint256 _amount0, uint256 _amount1,
-        uint160 sqrtRatioX96, int24 _tickSpacing) internal view
+        uint160 sqrtRatioX96, int24 _tickSpacing) internal pure
     returns (int24 _lowerTick, int24 _upperTick, uint128 _liquidity, uint128 _orderType) {
 
         _checkRange(_bidLower, _bidUpper, _tickSpacing);
@@ -66,6 +86,12 @@ library UniswapUtils {
         } else {
             (_lowerTick, _upperTick, _liquidity, _orderType) = (_askLower, _askUpper, askLiquidity, uint128(2));
         }
+    }
+
+    /// @dev Casts uint256 to uint128 with overflow check.
+    function _toUint128(uint256 x) internal pure returns (uint128) {
+        assert(x <= type(uint128).max);
+        return uint128(x);
     }
 
     /// @dev Wrapper around `LiquidityAmounts.getLiquidityForAmounts()`.

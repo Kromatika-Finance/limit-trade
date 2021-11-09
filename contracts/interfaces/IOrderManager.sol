@@ -11,8 +11,7 @@ interface IOrderManager {
         uint24 _fee;
         uint160 _sqrtPriceX96;
         uint256 _amount0;
-        uint256 _amount1; 
-        uint256 _targetGasPrice;
+        uint256 _amount1;
     }
 
     function placeLimitOrder(LimitOrderParams calldata params) external payable returns (uint256 tokenId);

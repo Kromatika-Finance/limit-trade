@@ -9,7 +9,6 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
-import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3MintCallback.sol";
@@ -44,9 +43,7 @@ contract LimitOrderManager is
         uint256 processed;
         uint256 batchId;
         IOrderMonitor monitor;
-        uint256 serviceFee;
         uint256 serviceFeePaid;
-        uint256 targetGasPrice;
         uint256 tokensOwed0;
         uint256 tokensOwed1;
     }
@@ -55,13 +52,6 @@ contract LimitOrderManager is
         PoolAddress.PoolKey poolKey;
         address payer;
     }
-
-    /// @dev liquidity deadline
-    uint256 private constant LIQUIDITY_DEADLINE = 60 seconds;
-
-    uint24 public constant POOL_FEE = 3000;
-
-    uint32 public constant TWAP_PERIOD = 60;
 
     /// @dev fired when a new limitOrder is placed
     event LimitOrderCreated(address indexed owner, uint256 indexed tokenId,
@@ -84,11 +74,17 @@ contract LimitOrderManager is
     /// @dev fired when funding is withdrawn
     event FundingWithdrawn(address indexed from, uint256 amount);
 
+    /// @dev target gas price
+    event TargetGasPriceSet(address indexed from, uint256 gasPrice);
+
     /// @dev funding
     mapping(address => uint256) public override funding;
 
-    /// @dev reserved funds
-    mapping(address => uint256) public reservedWeiFunds;
+    /// @dev gas price
+    mapping(address => uint256) public targetGasPrice;
+
+    /// @dev active orders
+    mapping(address => uint256) public activeOrders;
 
     /// @dev limitOrders per token id
     mapping (uint256 => LimitOrder) private limitOrders;
@@ -132,7 +128,7 @@ contract LimitOrderManager is
         nextId = 1;
 
         OwnableUpgradeable.__Ownable_init();
-        ERC721Upgradeable.__ERC721_init("Kromatika Limit Position", "KROM-LM-POS");
+        ERC721Upgradeable.__ERC721_init("Kromatika Position", "KROM-POS");
     }
 
     function placeLimitOrder(LimitOrderParams calldata params)
@@ -204,20 +200,22 @@ contract LimitOrderManager is
         limitOrder.tokensOwed1 = _amount1;
         limitOrder.liquidity = 0;
 
-        // send the service fee to the monitor
-        _serviceFeePaid = quoteKROM(limitOrder.serviceFee);
+        address _owner = ownerOf(_tokenId);
+        // send service fee for this order to the monitor based on the target gas price set
+        _serviceFeePaid = estimateServiceFee(targetGasPrice[_owner], 1);
+        require(_serviceFeePaid > 0);
+
         limitOrder.serviceFeePaid = _serviceFeePaid;
 
         // update balance
-        address _owner = ownerOf(_tokenId);
         uint256 balance = funding[_owner];
 
         // reduce balance
         balance = balance.sub(_serviceFeePaid);
         funding[_owner] = balance;
 
-        // reduce reservedWeiFunds
-        reservedWeiFunds[_owner] = reservedWeiFunds[_owner].sub(limitOrder.serviceFee);
+        // reduce activeOrders
+        activeOrders[_owner] = activeOrders[_owner].sub(1);
 
         TransferHelper.safeTransfer(
             address(KROM), msg.sender, _serviceFeePaid
@@ -250,6 +248,8 @@ contract LimitOrderManager is
         limitOrder.tokensOwed1 = _amount1;
         limitOrder.liquidity = 0;
 
+        activeOrders[msg.sender] = activeOrders[msg.sender].sub(1);
+
         // stop monitor
         limitOrder.monitor.stopMonitor(_tokenId);
         // collect the funds
@@ -271,14 +271,24 @@ contract LimitOrderManager is
         emit FundingAdded(msg.sender, _amount);
     }
 
+    function setTargetGasPrice(uint256 _targetGasPrice) external {
+
+        require(_targetGasPrice > 0);
+
+        targetGasPrice[msg.sender] = _targetGasPrice;
+        emit TargetGasPriceSet(msg.sender, _targetGasPrice);
+    }
+
     function withdrawFunding(uint256 _amount) external {
 
         uint256 balance = funding[msg.sender];
-        uint256 reservedKROM = quoteKROM(reservedWeiFunds[msg.sender]);
+        uint256 reservedServiceFee = estimateServiceFee(
+            targetGasPrice[msg.sender],
+            activeOrders[msg.sender]
+        );
+        require(balance >= reservedServiceFee);
 
         balance = balance.sub(_amount);
-        require(balance >= reservedKROM);
-
         funding[msg.sender] = balance;
         TransferHelper.safeTransfer(address(KROM), msg.sender, _amount);
         emit FundingWithdrawn(msg.sender, _amount);
@@ -309,7 +319,6 @@ contract LimitOrderManager is
         uint128 liquidity,
         uint256 opened,
         uint256 processed,
-        uint256 targetGasPrice,
         uint256 tokensOwed0,
         uint256 tokensOwed1
     )
@@ -326,7 +335,6 @@ contract LimitOrderManager is
             limitOrder.liquidity,
             limitOrder.opened,
             limitOrder.processed,
-            limitOrder.targetGasPrice,
             limitOrder.tokensOwed0,
             limitOrder.tokensOwed1
         );
@@ -336,8 +344,9 @@ contract LimitOrderManager is
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
 
-        (bool underfunded,) = isUnderfunded(ownerOf(_tokenId));
-        if (underfunded || limitOrder.targetGasPrice < _gasPrice) {
+        address _owner = ownerOf(_tokenId);
+        (bool underfunded,) = isUnderfunded(_owner);
+        if (underfunded || targetGasPrice[_owner] < _gasPrice) {
             return false;
         }
 
@@ -370,12 +379,20 @@ contract LimitOrderManager is
     function isUnderfunded(address _owner) public view returns (
         bool underfunded, uint256 amount
     ) {
-        uint256 reservedKROM = quoteKROM(reservedWeiFunds[_owner]);
-        uint256 balance = funding[_owner];
+        uint256 _targetGasPrice = targetGasPrice[_owner];
+        if (_targetGasPrice > 0) {
+            uint256 reservedServiceFee = estimateServiceFee(
+                _targetGasPrice,
+                activeOrders[_owner]
+            );
+            uint256 balance = funding[_owner];
 
-        if (reservedKROM > balance) {
+            if (reservedServiceFee > balance) {
+                underfunded = true;
+                amount = reservedServiceFee.sub(balance);
+            }
+        } else {
             underfunded = true;
-            amount = reservedKROM.sub(balance);
         }
     }
 
@@ -392,21 +409,30 @@ contract LimitOrderManager is
 
     function quoteKROM(uint256 _weiAmount) public view override returns (uint256 quote) {
 
-        address _poolAddress = factory.getPool(address(WETH), address(KROM), POOL_FEE);
-        require(_poolAddress != address(0));
-
-        if (_weiAmount > 0) {
-            // consult the pool in the last TWAP_PERIOD
-            int24 timeWeightedAverageTick = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
-            quote = OracleLibrary.getQuoteAtTick(
-                timeWeightedAverageTick, _toUint128(_weiAmount), address(WETH), address(KROM)
-            );
-        }
+        return UniswapUtils.quoteKROM(
+            factory,
+            address(WETH),
+            address(KROM),
+            _weiAmount
+        );
     }
 
-    function estimateServiceFeeWei(uint256 _targetGasPrice) public view returns (uint256) {
-        // TODO improve the service fee estimation --> add margin
-        return monitorGasUsage.mul(_targetGasPrice);
+    function serviceFee(address _owner) public view returns (uint256) {
+
+        return estimateServiceFee(
+            targetGasPrice[_owner],
+            activeOrders[_owner]
+        );
+    }
+
+    function estimateServiceFee(
+        uint256 _targetGasPrice,
+        uint256 _noOrders) public view returns (uint256) {
+
+        // TODO add margin
+        return quoteKROM(
+            monitorGasUsage.mul(_targetGasPrice).mul(_noOrders)
+        );
     }
 
     function _createLimitOrder(
@@ -415,10 +441,7 @@ contract LimitOrderManager is
         int24 _tickLower, int24 _tickUpper, uint128 _liquidity, uint128 _orderType, 
         address _owner) internal {
 
-        // first check the funding for the limitOrder
-        uint256 _serviceFeeWei = estimateServiceFeeWei(params._targetGasPrice);
-        reservedWeiFunds[_owner] = reservedWeiFunds[_owner].add(_serviceFeeWei);
-
+        activeOrders[_owner] = activeOrders[_owner].add(1);
         IOrderMonitor _monitor = _selectMonitor();
 
         // Create a limitOrder
@@ -432,9 +455,7 @@ contract LimitOrderManager is
             processed: 0,
             batchId: 0,
             monitor: _monitor,
-            serviceFee: _serviceFeeWei,
             serviceFeePaid: 0,
-            targetGasPrice: params._targetGasPrice,
             tokensOwed0: params._amount0,
             tokensOwed1: params._amount1
         });
