@@ -13,8 +13,8 @@ module.exports = async function (deployer, network, accounts) {
   await deployer.deploy(UniswapUtils);
   await deployer.link(UniswapUtils, LimitOrderManager);
 
-  // 400k gas cost
+  // 10% gas usage mp
   await deployProxy(LimitOrderManager,
-      [uniswapFactory, wrappedETHAddress, kromatikaInstance.address, 550000],
+      [uniswapFactory, wrappedETHAddress, kromatikaInstance.address, 10000],
       {deployer, unsafeAllow: ["external-library-linking"]});
 };

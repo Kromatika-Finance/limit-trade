@@ -33,6 +33,10 @@ contract LimitOrderManager is
 
     using SafeMath for uint256;
 
+    uint256 private constant MARGIN_GAS_USAGE_MULTIPLIER = 100000;
+
+    uint256 private constant MONITOR_GAS_USAGE = 600000;
+
     struct LimitOrder {
         uint256 tokenId;
         IUniswapV3Pool pool;
@@ -101,8 +105,8 @@ contract LimitOrderManager is
     /// @dev krom token
     IERC20 public KROM;
 
-    /// @dev order monitoring gas usage
-    uint256 public monitorGasUsage;
+    /// @dev gas usage multiplier
+    uint256 public marginGasUsageMultiplier;
 
     /// @dev last monitor index + 1 ; always > 0
     uint256 public nextMonitor;
@@ -114,17 +118,17 @@ contract LimitOrderManager is
     /// @param _factory univ3 factory
     /// @param _WETH wrapped ETH
     /// @param _KROM kromatika token
-    /// @param _monitorGasUsage gas usage of the order monitor
+    /// @param _marginGasUsageMultiplier gas usage of the order monitor
     function initialize(IUniswapV3Factory _factory,
             IWETH9 _WETH,
             IERC20 _KROM,
-            uint256 _monitorGasUsage) public initializer {
+            uint256 _marginGasUsageMultiplier) public initializer {
 
         factory = _factory;
         WETH = _WETH;
         KROM = _KROM;
 
-        monitorGasUsage = _monitorGasUsage;
+        marginGasUsageMultiplier = _marginGasUsageMultiplier;
         nextId = 1;
 
         OwnableUpgradeable.__Ownable_init();
@@ -264,6 +268,7 @@ contract LimitOrderManager is
         _collect(_tokenId, msg.sender);
     }
 
+    // TODO multicall for add funding and setTarget price doesnt work
     function addFunding(uint256 _amount) external {
 
         funding[msg.sender] = funding[msg.sender].add(_amount);
@@ -402,9 +407,14 @@ contract LimitOrderManager is
         monitors = _newMonitors;
     }
 
-    function setMonitorGasUsage(uint256 _monitorGasUsage) external onlyOwner {
+    function monitorsLength() external view returns (uint256) {
+        return monitors.length;
+    }
 
-        monitorGasUsage = _monitorGasUsage;
+    function setMarginGasUsageMultiplier(uint256 _marginGasUsageMultiplier) external onlyOwner {
+
+        require(_marginGasUsageMultiplier <= MARGIN_GAS_USAGE_MULTIPLIER, "INVALID_FEE");
+        marginGasUsageMultiplier = _marginGasUsageMultiplier;
     }
 
     function quoteKROM(uint256 _weiAmount) public view override returns (uint256 quote) {
@@ -429,9 +439,10 @@ contract LimitOrderManager is
         uint256 _targetGasPrice,
         uint256 _noOrders) public view returns (uint256) {
 
-        // TODO add margin
         return quoteKROM(
-            monitorGasUsage.mul(_targetGasPrice).mul(_noOrders)
+            MONITOR_GAS_USAGE.mul(_targetGasPrice).mul(_noOrders)
+            .mul(MARGIN_GAS_USAGE_MULTIPLIER.add(marginGasUsageMultiplier))
+            .div(MARGIN_GAS_USAGE_MULTIPLIER)
         );
     }
 
@@ -481,7 +492,7 @@ contract LimitOrderManager is
         LimitOrder storage limitOrder = limitOrders[_tokenId];
         require(limitOrder.processed > 0);
 
-        // TODO hidden gem, collect the liquidity fees for all pools
+        // TODO collect the liquidity fees for all pools
 
         (_tokensToSend0, _tokensToSend1) =
             limitOrder.pool.collect(
@@ -494,7 +505,7 @@ contract LimitOrderManager is
 
         require(_tokensToSend0 > 0 || _tokensToSend1 > 0);
 
-        // refund KROM
+        // refund
         uint256 payment = limitOrder.monitor.batchPayment(
             limitOrder.batchId
         );
