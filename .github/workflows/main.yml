@@ -40,4 +40,4 @@ jobs:
         env:
           MYTHX_API_KEY: ${{ secrets.MYTHX_API_KEY }}
         run: |
-          mythx --ci --yes analyze --solc-version 0.7.6 contracts/
+          mythx --ci --yes analyze --solc-version 0.7.6
