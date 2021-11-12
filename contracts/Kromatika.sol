@@ -2,12 +2,12 @@
 
 pragma solidity >=0.7.5;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/drafts/ERC20Permit.sol";
 
 ///	@title	Kromatika token contract
-contract Kromatika is ERC20 {
+contract Kromatika is ERC20Permit {
 
-    constructor() ERC20("Kromatika", "KROM") {
-        _mint(msg.sender, 100000000 * 10 ** decimals());
+    constructor() ERC20("Kromatika", "KROM") ERC20Permit("Kromatika") {
+        _mint(msg.sender, 100_000_000e18);
     }
 }

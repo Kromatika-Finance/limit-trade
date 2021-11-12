@@ -268,7 +268,6 @@ contract LimitOrderManager is
         _collect(_tokenId, msg.sender);
     }
 
-    // TODO multicall for add funding and setTarget price doesnt work
     function addFunding(uint256 _amount) external {
 
         funding[msg.sender] = funding[msg.sender].add(_amount);
