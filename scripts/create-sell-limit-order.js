@@ -83,9 +83,8 @@ module.exports = async(callback) => {
             console.log('Allowance: ' + (await token1Instance.allowance(currentAccount, tradeInstance.address)).toString());
         }
 
-        // calculate the monitoring deposit
-        const estimatedServiceFee = await tradeInstance.estimateServiceFeeWei(targetGasPrice);
-        const serviceFee = await tradeInstance.quoteKROM.call(estimatedServiceFee);
+        // calculate the service fee for one order
+        const serviceFee = await tradeInstance.estimateServiceFee(currentAccount, targetGasPrice, 1);
 
         console.log("Estimated service fee --> " + web3.utils.fromWei(serviceFee.toString()));
         const funding = await tradeInstance.funding(currentAccount);

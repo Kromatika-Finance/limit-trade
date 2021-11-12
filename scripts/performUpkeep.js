@@ -11,10 +11,7 @@ module.exports = async(callback) => {
         const limitMonitor = await LimitOrderMonitor.deployed();
         const limitManager = await LimitOrderManager.deployed();
 
-        const targetGasPrice = web3.utils.toWei("2.5", "gwei");
-
-        const canProcess = await limitManager.canProcess("2", targetGasPrice);
-        console.log(canProcess);
+        const targetGasPrice = web3.utils.toWei("20", "gwei");
 
         const isUnderfunded = await limitManager.isUnderfunded(currentAccount);
         console.log(JSON.stringify(isUnderfunded));
