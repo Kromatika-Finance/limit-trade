@@ -60,7 +60,7 @@ library UniswapUtils {
 
         if (_weiAmount > 0) {
             // consult the pool in the last TWAP_PERIOD
-            int24 timeWeightedAverageTick = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
+            (int24 timeWeightedAverageTick,) = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
             quote = OracleLibrary.getQuoteAtTick(
                 timeWeightedAverageTick, _toUint128(_weiAmount), WETH, KROM
             );
