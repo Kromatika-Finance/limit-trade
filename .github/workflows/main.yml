@@ -1,0 +1,43 @@
+# Reference: https://github.com/marketplace/actions/setup-node-js-environment
+
+name: run analyses
+
+on: workflow_dispatch
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Setup NodeJS 16
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+      - name: Show NodeJS version
+        run: npm --version
+
+      - name: Install Dependencies
+        run: yarn install
+
+      - name: Build
+        run: yarn build
+
+      - name: Setup Python 3.8
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8 # Version range or exact version of a Python version to use, using SemVer's version range syntax
+          architecture: 'x64' # optional x64 or x86. Defaults to x64 if not specified
+      - name: Show Python version
+        run: python --version
+
+      - name: Install mythx
+        run: pip3 install mythx-cli
+
+      - name: Run MythX Analysis1
+        env:
+          MYTHX_API_KEY: ${{ secrets.MYTHX_API_KEY }}
+        run: |
+          mythx --ci --yes analyze --solc-version 0.7.6 contracts/
