@@ -35,8 +35,6 @@ contract LimitOrderManager is
 
     uint256 private constant MARGIN_GAS_USAGE_MULTIPLIER = 100000;
 
-    uint256 private constant MONITOR_GAS_USAGE = 600000;
-
     struct LimitOrder {
         uint256 tokenId;
         IUniswapV3Pool pool;
@@ -108,27 +106,40 @@ contract LimitOrderManager is
     /// @dev gas usage multiplier
     uint256 public marginGasUsageMultiplier;
 
+    /// @dev estimated gas usage when monitoring L.O
+    uint256 public override gasUsageMonitor;
+
     /// @dev last monitor index + 1 ; always > 0
     uint256 public nextMonitor;
 
     /// @dev The ID of the next token that will be minted. Skips 0
     uint176 private nextId;
 
+    /// @dev twap period
+    uint32 public twapPeriod;
+
     /// @notice Initializes the smart contract instead of a constructorr
     /// @param _factory univ3 factory
     /// @param _WETH wrapped ETH
     /// @param _KROM kromatika token
-    /// @param _marginGasUsageMultiplier gas usage of the order monitor
-    function initialize(IUniswapV3Factory _factory,
+    /// @param _gasUsageMonitor estimated gas usage of monitors
+    /// @param _marginGasUsageMultiplier multiplier for the monitor gas usage
+    function initialize(
+            IUniswapV3Factory _factory,
             IWETH9 _WETH,
             IERC20 _KROM,
-            uint256 _marginGasUsageMultiplier) public initializer {
+            uint256 _gasUsageMonitor,
+            uint256 _marginGasUsageMultiplier,
+            uint32  _twapPeriod
+    ) public initializer {
 
         factory = _factory;
         WETH = _WETH;
         KROM = _KROM;
 
         marginGasUsageMultiplier = _marginGasUsageMultiplier;
+        gasUsageMonitor = _gasUsageMonitor;
+        twapPeriod = _twapPeriod;
         nextId = 1;
 
         OwnableUpgradeable.__Ownable_init();
@@ -207,8 +218,6 @@ contract LimitOrderManager is
         address _owner = ownerOf(_tokenId);
         // send service fee for this order to the monitor based on the target gas price set
         _serviceFeePaid = estimateServiceFee(targetGasPrice[_owner], 1);
-        require(_serviceFeePaid > 0);
-
         limitOrder.serviceFeePaid = _serviceFeePaid;
 
         // update balance
@@ -229,8 +238,9 @@ contract LimitOrderManager is
     }
 
 
-    function cancelLimitOrder(uint256 _tokenId) external
-    returns (uint256 _amount0, uint256 _amount1) {
+    function cancelLimitOrder(uint256 _tokenId) external returns (
+        uint256 _amount0, uint256 _amount1
+    ) {
 
         isAuthorizedForToken(_tokenId);
 
@@ -406,8 +416,9 @@ contract LimitOrderManager is
         monitors = _newMonitors;
     }
 
-    function monitorsLength() external view returns (uint256) {
-        return monitors.length;
+    function addMonitor(IOrderMonitor _newMonitor) external onlyOwner {
+
+        monitors.push(_newMonitor);
     }
 
     function setMarginGasUsageMultiplier(uint256 _marginGasUsageMultiplier) external onlyOwner {
@@ -416,13 +427,28 @@ contract LimitOrderManager is
         marginGasUsageMultiplier = _marginGasUsageMultiplier;
     }
 
+    function setGasUsageMonitor(uint256 _gasUsageMonitor) external onlyOwner {
+
+        gasUsageMonitor = _gasUsageMonitor;
+    }
+
+    function setTwapPeriod(uint32 _twapPeriod) external onlyOwner {
+
+        twapPeriod = _twapPeriod;
+    }
+
+    function monitorsLength() external view returns (uint256) {
+        return monitors.length;
+    }
+
     function quoteKROM(uint256 _weiAmount) public view override returns (uint256 quote) {
 
         return UniswapUtils.quoteKROM(
             factory,
             address(WETH),
             address(KROM),
-            _weiAmount
+            _weiAmount,
+            twapPeriod
         );
     }
 
@@ -439,7 +465,7 @@ contract LimitOrderManager is
         uint256 _noOrders) public view returns (uint256) {
 
         return quoteKROM(
-            MONITOR_GAS_USAGE.mul(_targetGasPrice).mul(_noOrders)
+            gasUsageMonitor.mul(_targetGasPrice).mul(_noOrders)
             .mul(MARGIN_GAS_USAGE_MULTIPLIER.add(marginGasUsageMultiplier))
             .div(MARGIN_GAS_USAGE_MULTIPLIER)
         );

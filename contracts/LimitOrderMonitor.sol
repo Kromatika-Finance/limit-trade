@@ -119,7 +119,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         bytes memory performData
     ) {
 
-        if (upkeepNeeded = (block.number - lastUpkeep) > upkeepInterval) {
+        if (upkeepNeeded = (_getBlockNumber() - lastUpkeep) > upkeepInterval) {
             uint256 _tokenId;
             uint256[] memory batchTokenIds = new uint256[](batchSize);
             uint256 count;
@@ -128,7 +128,8 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
             for (uint256 i = 0; i < tokenIds.length; i++) {
                 _tokenId = tokenIds[i];
                 upkeepNeeded = orderManager.canProcess(
-                    _tokenId, tx.gasprice > 0 ? tx.gasprice : 0
+                    _tokenId,
+                    _getGasPrice(tx.gasprice)
                 );
                 if (upkeepNeeded) {
                     batchTokenIds[count] = _tokenId;
@@ -181,7 +182,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         _gasUsed = _gasUsed - gasleft();
 
         // calculate the payment owed to the sender
-        uint256 paymentOwed = _calculatePaymentAmount(_gasUsed);
+        uint256 paymentOwed = _calculatePaymentAmount(_gasUsed, validCount);
         require(paymentPaid >= paymentOwed);
 
         batchPayment[batchCount] = paymentOwed.div(validCount);
@@ -238,10 +239,12 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
             delete tokenIndexPerTokenId[lastTokenId];
         } else if (tokenIndexToRemove != tokenIds.length) {
             tokenIndexPerTokenId[lastTokenId] = tokenIndexToRemove + 1;
+            delete tokenIndexPerTokenId[_tokenId];
         }
     }
 
-    function _calculatePaymentAmount(uint256 _gasUsed) internal view
+    // TODO override for ARB only uint256 paymentOwed = _calculatePaymentAmount(orderManager.gasUsageMonitor().mul(validCount));
+    function _calculatePaymentAmount(uint256 _gasUsed, uint256) internal virtual view
     returns (uint256 payment) {
 
         uint256 gasWei = tx.gasprice;
@@ -251,6 +254,19 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         payment = orderManager.quoteKROM(_weiForGas);
     }
 
+    // TODO override for chainlink (use fast gas)
+    function _getGasPrice(uint256 _txnGasPrice) internal virtual view
+    returns (uint256 gasPrice) {
+        gasPrice = _txnGasPrice > 0 ? _txnGasPrice : 0;
+    }
+
+    // TODO (override block numbers for L2)
+    function _getBlockNumber() internal virtual view
+    returns (uint256 blockNumber) {
+        blockNumber = block.number;
+    }
+
+    // TODO for different transfers
     function _transferFees(uint256 _amount, address _owner) internal virtual {
         if (_amount > 0) {
             TransferHelper.safeTransfer(address(KROM), _owner, _amount);

@@ -15,6 +15,6 @@ module.exports = async function (deployer, network, accounts) {
 
   // 10% gas usage mp
   await deployProxy(LimitOrderManager,
-      [uniswapFactory, wrappedETHAddress, kromatikaInstance.address, 10000],
+      [uniswapFactory, wrappedETHAddress, kromatikaInstance.address, 600000, 10000, 300],
       {deployer, unsafeAllow: ["external-library-linking", 'delegatecall']});
 };

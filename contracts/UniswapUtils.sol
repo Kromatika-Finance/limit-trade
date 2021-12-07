@@ -20,8 +20,6 @@ library UniswapUtils {
 
     uint24 public constant POOL_FEE = 3000;
 
-    uint32 public constant TWAP_PERIOD = 20;
-
     function calculateLimitTicks(
         IUniswapV3Pool _pool, IOrderManager.LimitOrderParams memory params) external view
     returns (
@@ -52,15 +50,20 @@ library UniswapUtils {
 
     }
 
-    function quoteKROM(IUniswapV3Factory factory, address WETH, address KROM, uint256 _weiAmount)
+    function quoteKROM(IUniswapV3Factory factory, address WETH, address KROM,
+        uint256 _weiAmount, uint32 _twapPeriod)
     public view returns (uint256 quote) {
 
         address _poolAddress = factory.getPool(WETH, KROM, POOL_FEE);
         require(_poolAddress != address(0));
 
         if (_weiAmount > 0) {
-            // consult the pool in the last TWAP_PERIOD
-            (int24 timeWeightedAverageTick,) = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
+
+            // consult the pool in the last _twapPeriod
+            (int24 timeWeightedAverageTick,) = OracleLibrary.consult(
+                _poolAddress,
+                _twapPeriod
+            );
             quote = OracleLibrary.getQuoteAtTick(
                 timeWeightedAverageTick, _toUint128(_weiAmount), WETH, KROM
             );

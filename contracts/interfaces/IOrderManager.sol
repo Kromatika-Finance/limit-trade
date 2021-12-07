@@ -25,4 +25,6 @@ interface IOrderManager {
     function quoteKROM(uint256 weiAmount) external view returns (uint256 quote);
 
     function funding(address owner) external view returns (uint256 balance);
+
+    function gasUsageMonitor() external view returns (uint256);
 }
