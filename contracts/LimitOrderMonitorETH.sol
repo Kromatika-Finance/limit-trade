@@ -48,7 +48,7 @@ contract LimitOrderMonitorETH is LimitOrderMonitor {
                 tokenIn: address(KROM),
                 tokenOut: address(WETH),
                 fee: POOL_FEE,
-                recipient: address(this),
+                recipient: _owner,
                 deadline: block.timestamp,
                 amountIn: _amount,
                 amountOutMinimum: 0,
@@ -57,9 +57,6 @@ contract LimitOrderMonitorETH is LimitOrderMonitor {
 
             // swap and send
             _amount = swapRouter.exactInputSingle(params);
-
-            WETH.withdraw(_amount);
-            TransferHelper.safeTransferETH(_owner, _amount);
         }
     }
 }

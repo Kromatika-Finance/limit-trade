@@ -12,8 +12,10 @@ import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3MintCallback.sol";
-import "@uniswap/v3-periphery/contracts/libraries/CallbackValidation.sol";
+import '@uniswap/v3-core/contracts/libraries/FixedPoint128.sol';
+import '@uniswap/v3-core/contracts/libraries/FullMath.sol';
 
+import "@uniswap/v3-periphery/contracts/libraries/CallbackValidation.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 
 import "./interfaces/IOrderMonitor.sol";
@@ -33,10 +35,9 @@ contract LimitOrderManager is
 
     using SafeMath for uint256;
 
-    uint256 private constant MARGIN_GAS_USAGE_MULTIPLIER = 100000;
+    uint256 private constant PROTOCOL_FEE_MULTIPLIER = 100000;
 
     struct LimitOrder {
-        uint256 tokenId;
         IUniswapV3Pool pool;
         int24 tickLower;
         int24 tickUpper;
@@ -46,6 +47,8 @@ contract LimitOrderManager is
         uint256 batchId;
         IOrderMonitor monitor;
         uint256 serviceFeePaid;
+        uint256 feeGrowthInside0LastX128;
+        uint256 feeGrowthInside1LastX128;
         uint256 tokensOwed0;
         uint256 tokensOwed1;
     }
@@ -103,10 +106,10 @@ contract LimitOrderManager is
     /// @dev krom token
     IERC20 public KROM;
 
-    /// @dev gas usage multiplier
-    uint256 public marginGasUsageMultiplier;
+    /// @dev address where the protocol fee is sent
+    address public feeAddress;
 
-    /// @dev estimated gas usage when monitoring L.O
+    /// @dev estimated gas usage when monitoring L.O, including a margin as well
     uint256 public override gasUsageMonitor;
 
     /// @dev last monitor index + 1 ; always > 0
@@ -118,28 +121,35 @@ contract LimitOrderManager is
     /// @dev twap period
     uint32 public twapPeriod;
 
+    /// @dev twap period
+    uint32 public protocolFee;
+
     /// @notice Initializes the smart contract instead of a constructorr
-    /// @param _factory univ3 factory
-    /// @param _WETH wrapped ETH
-    /// @param _KROM kromatika token
-    /// @param _gasUsageMonitor estimated gas usage of monitors
-    /// @param _marginGasUsageMultiplier multiplier for the monitor gas usage
+    /// @param  _factory univ3 factory
+    /// @param  _WETH wrapped ETH
+    /// @param  _KROM kromatika token
+    /// @param  _feeAddress protocol fee address
+    /// @param  _gasUsageMonitor estimated gas usage of monitors
+    /// @param  _twapPeriod for oracles
+    /// @param  _protocolFee charged fee
     function initialize(
             IUniswapV3Factory _factory,
             IWETH9 _WETH,
             IERC20 _KROM,
+            address _feeAddress,
             uint256 _gasUsageMonitor,
-            uint256 _marginGasUsageMultiplier,
-            uint32  _twapPeriod
+            uint32  _twapPeriod,
+            uint32  _protocolFee
     ) public initializer {
 
         factory = _factory;
         WETH = _WETH;
         KROM = _KROM;
 
-        marginGasUsageMultiplier = _marginGasUsageMultiplier;
         gasUsageMonitor = _gasUsageMonitor;
         twapPeriod = _twapPeriod;
+        protocolFee = _protocolFee;
+
         nextId = 1;
 
         OwnableUpgradeable.__Ownable_init();
@@ -207,7 +217,9 @@ contract LimitOrderManager is
             limitOrder.pool,
             limitOrder.tickLower, 
             limitOrder.tickUpper, 
-            limitOrder.liquidity
+            limitOrder.liquidity,
+            limitOrder.feeGrowthInside0LastX128,
+            limitOrder.feeGrowthInside1LastX128
         );
 
         // no liquidity for this position anymore
@@ -217,6 +229,9 @@ contract LimitOrderManager is
 
         address _owner = ownerOf(_tokenId);
         // send service fee for this order to the monitor based on the target gas price set
+
+        // TODO charge a _protocolFeePaid that goes to fee address
+        // and the rest from the _serviceFeePaid goes to the monitor
         _serviceFeePaid = estimateServiceFee(targetGasPrice[_owner], 1);
         limitOrder.serviceFeePaid = _serviceFeePaid;
 
@@ -233,6 +248,10 @@ contract LimitOrderManager is
         TransferHelper.safeTransfer(
             address(KROM), msg.sender, _serviceFeePaid
         );
+
+//        TransferHelper.safeTransfer(
+//            address(KROM), feeAddress, _protocolFeePaid
+//        );
 
         emit LimitOrderProcessed(msg.sender, _tokenId, _batchId, _serviceFeePaid);
     }
@@ -255,7 +274,9 @@ contract LimitOrderManager is
             limitOrder.pool,
             limitOrder.tickLower, 
             limitOrder.tickUpper, 
-            limitOrder.liquidity
+            limitOrder.liquidity,
+            limitOrder.feeGrowthInside0LastX128,
+            limitOrder.feeGrowthInside1LastX128
         );
 
         limitOrder.tokensOwed0 = _amount0;
@@ -421,10 +442,10 @@ contract LimitOrderManager is
         monitors.push(_newMonitor);
     }
 
-    function setMarginGasUsageMultiplier(uint256 _marginGasUsageMultiplier) external onlyOwner {
+    function setProtocolFee(uint32 _protocolFee) external onlyOwner {
 
-        require(_marginGasUsageMultiplier <= MARGIN_GAS_USAGE_MULTIPLIER, "INVALID_FEE");
-        marginGasUsageMultiplier = _marginGasUsageMultiplier;
+        require(_protocolFee <= PROTOCOL_FEE_MULTIPLIER, "INVALID_FEE");
+        protocolFee = _protocolFee;
     }
 
     function setGasUsageMonitor(uint256 _gasUsageMonitor) external onlyOwner {
@@ -466,9 +487,8 @@ contract LimitOrderManager is
 
         return quoteKROM(
             gasUsageMonitor.mul(_targetGasPrice).mul(_noOrders)
-            .mul(MARGIN_GAS_USAGE_MULTIPLIER.add(marginGasUsageMultiplier))
-            .div(MARGIN_GAS_USAGE_MULTIPLIER)
-        );
+        ).mul(PROTOCOL_FEE_MULTIPLIER.add(protocolFee))
+        .div(PROTOCOL_FEE_MULTIPLIER);
     }
 
     function _createLimitOrder(
@@ -480,9 +500,12 @@ contract LimitOrderManager is
         activeOrders[_owner] = activeOrders[_owner].add(1);
         IOrderMonitor _monitor = _selectMonitor();
 
+        (, uint256 _feeGrowthInside0LastX128, uint256 _feeGrowthInside1LastX128, , ) = _pool.positions(
+            PositionKey.compute(address(this), _tickLower, _tickUpper)
+        );
+
         // Create a limitOrder
         LimitOrder memory newLimitOrder = LimitOrder({
-            tokenId: _tokenId,
             pool: _pool,
             tickLower: _tickLower,
             tickUpper: _tickUpper,
@@ -492,6 +515,8 @@ contract LimitOrderManager is
             batchId: 0,
             monitor: _monitor,
             serviceFeePaid: 0,
+            feeGrowthInside0LastX128: _feeGrowthInside0LastX128,
+            feeGrowthInside1LastX128: _feeGrowthInside1LastX128,
             tokensOwed0: params._amount0,
             tokensOwed1: params._amount1
         });
@@ -516,8 +541,6 @@ contract LimitOrderManager is
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
         require(limitOrder.processed > 0);
-
-        // TODO collect the liquidity fees for all pools
 
         (_tokensToSend0, _tokensToSend1) =
             limitOrder.pool.collect(
@@ -614,7 +637,9 @@ contract LimitOrderManager is
         IUniswapV3Pool pool,
         int24 tickLower,
         int24 tickUpper,
-        uint128 liquidity
+        uint128 liquidity,
+        uint256 positionFeeGrowthInside0LastX128,
+        uint256 positionFeeGrowthInside1LastX128
     )
     internal
     returns (
@@ -624,6 +649,23 @@ contract LimitOrderManager is
 
         if (liquidity > 0) {
             (amount0, amount1) = pool.burn(tickLower, tickUpper, liquidity);
+
+            bytes32 positionKey = PositionKey.compute(address(this), tickLower, tickUpper);
+            (, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, , ) = pool.positions(positionKey);
+
+            amount0 = amount0 +
+            FullMath.mulDiv(
+                feeGrowthInside0LastX128 - positionFeeGrowthInside0LastX128,
+                liquidity,
+                FixedPoint128.Q128
+            );
+
+            amount1 = amount1 +
+            FullMath.mulDiv(
+                feeGrowthInside1LastX128 - positionFeeGrowthInside1LastX128,
+                liquidity,
+                FixedPoint128.Q128
+            );
         }
     }
 
