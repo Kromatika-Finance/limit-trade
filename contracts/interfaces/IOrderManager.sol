@@ -10,8 +10,8 @@ interface IOrderManager {
         address _token1; 
         uint24 _fee;
         uint160 _sqrtPriceX96;
-        uint256 _amount0;
-        uint256 _amount1;
+        uint128 _amount0;
+        uint128 _amount1;
     }
 
     function placeLimitOrder(LimitOrderParams calldata params) external payable returns (uint256 tokenId);

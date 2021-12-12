@@ -30,10 +30,10 @@ contract LimitOrderMonitorChainlink is LimitOrderMonitor {
     function initialize(IOrderManager _orderManager,
         IUniswapV3Factory _factory,
         IERC20 _KROM,
-        uint256 _batchSize,
-        uint256 _monitorSize,
-        uint256 _upkeepInterval,
-        uint256 _monitorFee,
+        uint24 _batchSize,
+        uint24 _monitorSize,
+        uint24 _upkeepInterval,
+        uint24 _monitorFee,
         ISwapRouter _swapRouter,
         IWETH9 _WETH,
         IERC20 _LINK) public initializer {
@@ -47,8 +47,9 @@ contract LimitOrderMonitorChainlink is LimitOrderMonitor {
         WETH = _WETH;
     }
 
-    function setKeeperId(uint256 _keeperId) external onlyOwner {
+    function setKeeperId(uint256 _keeperId) external {
 
+        isAuthorizedController();
         keeperId = _keeperId;
     }
 
