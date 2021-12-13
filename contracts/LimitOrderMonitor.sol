@@ -279,7 +279,7 @@ contract LimitOrderMonitor is
 
         uint256 gasWei = tx.gasprice;
         uint256 _weiForGas = gasWei.mul(_gasUsed.add(MONITOR_OVERHEAD));
-        _weiForGas = _weiForGas.mul(FEE_MULTIPLIER + monitorFee).div(FEE_MULTIPLIER);
+        _weiForGas = _weiForGas.mul(FEE_MULTIPLIER.add(monitorFee)).div(FEE_MULTIPLIER);
 
         payment = orderManager.quoteKROM(_weiForGas);
     }

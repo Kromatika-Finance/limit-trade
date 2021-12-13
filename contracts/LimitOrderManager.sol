@@ -32,7 +32,7 @@ contract LimitOrderManager is
 
     using SafeMath for uint256;
 
-    uint256 private constant PROTOCOL_FEE_MULTIPLIER = 100000;
+    uint256 public constant PROTOCOL_FEE_MULTIPLIER = 100000;
 
     struct LimitOrder {
         IUniswapV3Pool pool;
@@ -158,7 +158,7 @@ contract LimitOrderManager is
     }
 
     function placeLimitOrder(LimitOrderParams calldata params)
-        external payable override returns (
+        public payable override virtual returns (
             uint256 _tokenId
         ) {
 
@@ -316,7 +316,8 @@ contract LimitOrderManager is
         uint256 balance = funding[msg.sender];
         (uint256 reservedServiceFee,) = estimateServiceFee(
             targetGasPrice[msg.sender],
-            activeOrders[msg.sender]
+            activeOrders[msg.sender],
+            msg.sender
         );
         require(balance >= reservedServiceFee);
 
@@ -411,7 +412,7 @@ contract LimitOrderManager is
         uint256 _targetGasPrice = targetGasPrice[_owner];
         if (_targetGasPrice > 0) {
             (_serviceFee,_monitorFee)= estimateServiceFee(
-                _targetGasPrice, 1
+                _targetGasPrice, 1, _owner
             );
             uint256 reservedServiceFee = _serviceFee.mul(activeOrders[_owner]);
             uint256 balance = funding[_owner];
@@ -471,13 +472,16 @@ contract LimitOrderManager is
 
         (_serviceFee,) = estimateServiceFee(
             targetGasPrice[_owner],
-            activeOrders[_owner]
+            activeOrders[_owner],
+            _owner
         );
     }
 
     function estimateServiceFee(
         uint256 _targetGasPrice,
-        uint256 _noOrders) public view returns (uint256 _serviceFee, uint256 _monitorFee) {
+        uint256 _noOrders,
+        address _owner) public view virtual
+    returns (uint256 _serviceFee, uint256 _monitorFee) {
 
         _monitorFee = quoteKROM(
             gasUsageMonitor.mul(_targetGasPrice).mul(_noOrders)
