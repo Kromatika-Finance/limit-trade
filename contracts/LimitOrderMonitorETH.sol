@@ -3,15 +3,14 @@
 pragma solidity >=0.7.5;
 pragma abicoder v2;
 
-import "@chainlink/contracts/src/v0.7/interfaces/KeeperRegistryInterface.sol";
-
 import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 
 import "./LimitOrderMonitor.sol";
+import "./WETHExtended.sol";
 
-/// @title  LimitOrderMonitorChainlink
-contract LimitOrderMonitorChainlink is LimitOrderMonitor {
+/// @title  LimitOrderMonitorETH
+contract LimitOrderMonitorETH is LimitOrderMonitor {
 
     uint24 public constant POOL_FEE = 3000;
 
@@ -21,11 +20,8 @@ contract LimitOrderMonitorChainlink is LimitOrderMonitor {
     /// @dev wrapper ETH
     IWETH9 public WETH;
 
-    /// @dev link token address
-    IERC20 public LINK;
-
-    /// @dev monitor keeperID
-    uint256 public keeperId;
+    /// @dev simple WETH adapter
+    WETHExtended public WETHExt;
 
     function initialize(IOrderManager _orderManager,
         IUniswapV3Factory _factory,
@@ -37,7 +33,8 @@ contract LimitOrderMonitorChainlink is LimitOrderMonitor {
         uint256 _monitorFee,
         ISwapRouter _swapRouter,
         IWETH9 _WETH,
-        IERC20 _LINK) public initializer {
+        WETHExtended _WETHExt
+    ) public initializer {
 
         super.initialize(
             _orderManager, _factory, _KROM, _keeper,
@@ -45,37 +42,32 @@ contract LimitOrderMonitorChainlink is LimitOrderMonitor {
         );
 
         swapRouter = _swapRouter;
-        LINK = _LINK;
         WETH = _WETH;
-    }
-
-    function setKeeperId(uint256 _keeperId) external {
-
-        isAuthorizedController();
-        keeperId = _keeperId;
+        WETHExt = _WETHExt;
     }
 
     function _transferFees(uint256 _amount, address _owner) internal virtual override  {
 
         if (_amount > 0) {
-            require(keeperId > 0);
-            // swap KROM into LINKs
+            // swap KROM into ETH
             TransferHelper.safeApprove(address(KROM), address(swapRouter), _amount);
 
-            ISwapRouter.ExactInputParams memory params =
-            ISwapRouter.ExactInputParams({
-                path: abi.encodePacked(address(KROM), POOL_FEE, address(WETH), POOL_FEE, address(LINK)),
-                recipient: address(this),
+            ISwapRouter.ExactInputSingleParams memory params =
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: address(KROM),
+                tokenOut: address(WETH),
+                fee: POOL_FEE,
+                recipient: address(WETHExt),
                 deadline: block.timestamp,
                 amountIn: _amount,
-                amountOutMinimum: 0
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
             });
 
             // swap and send
-            _amount = swapRouter.exactInput(params);
+            _amount = swapRouter.exactInputSingle(params);
 
-            TransferHelper.safeApprove(address(LINK), _owner, _amount);
-            KeeperRegistryInterface(_owner).addFunds(keeperId, uint96(_amount));
+            WETHExt.withdraw(_amount, _owner, WETH);
         }
     }
 }

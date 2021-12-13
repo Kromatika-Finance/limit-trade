@@ -24,6 +24,9 @@ require('dotenv').config()
 console.log(process.env.RPC_URL)
 console.log(process.env.MNEMONIC)
 
+const gasPrice = process.env.GAS_PRICE ? process.env.GAS_PRICE : 30000000000; // 30gwei
+const gasLimit = process.env.GAS_LIMIT ? process.env.GAS_LIMIT : 200000000;   //
+
 //
 // const fs = require('fs');
 // const mnemonic = fs.readFileSync(".secret").toString().trim();
@@ -53,13 +56,13 @@ module.exports = {
             skipDryRun: true,
             networkCheckTimeout: 1000000
         },
-        ropsten: {
+        rinkeby: {
             provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
             network_id: 4,
             skipDryRun: true,
             websockets: true,
             timeoutBlocks: 200,
-            networkCheckTimeout: 1000000
+            networkCheckTimeout: 1000000,
         },
         kovan: {
             provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
@@ -69,11 +72,45 @@ module.exports = {
             timeoutBlocks: 200,
             networkCheckTimeout: 1000000
         },
+        "arbitrum-rinkeby":{
+            provider: () => new HDWalletProvider(process.env.MNEMONIC, process.env.RPC_URL),
+            network_id: 421611,
+            skipDryRun: false,
+            websockets: true,
+            gas: gasLimit,
+            deploymentPollingInterval: 15000,
+            disableConfirmationListener: true
+        },
+        "optimism":{
+            provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
+            network_id: 10,
+            skipDryRun: false,
+            websockets: true,
+            networkCheckTimeout: 5000000
+        },
+        "optimism-kovan":{
+            provider: () => new HDWalletProvider(process.env.MNEMONIC, process.env.RPC_URL),
+            network_id: 69,
+            skipDryRun: false,
+            websockets: true,
+            networkCheckTimeout: 5000000
+        },
+        "arbitrum":{
+            provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
+            network_id: 42161,
+            skipDryRun: false,
+            websockets: true,
+            gasPrice: gasPrice,
+            gas: gasLimit
+        },
         "mainnet":{
             provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
             network_id: 1,
             skipDryRun: false,
-            websockets: true
+            timeoutBlocks: 1000,
+            websockets: true,
+            gasPrice: gasPrice,
+            gas: gasLimit
         },
         // Another network with more advanced options...
         // advanced: {

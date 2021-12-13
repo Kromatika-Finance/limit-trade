@@ -3,6 +3,8 @@
 pragma solidity >=0.7.5;
 pragma abicoder v2;
 
+import "@openzeppelin/contracts/math/SafeMath.sol";
+
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
 import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
@@ -18,9 +20,9 @@ import "./interfaces/IOrderManager.sol";
 
 library UniswapUtils {
 
-    uint24 public constant POOL_FEE = 3000;
+    using SafeMath for uint256;
 
-    uint32 public constant TWAP_PERIOD = 20;
+    uint24 public constant POOL_FEE = 3000;
 
     function calculateLimitTicks(
         IUniswapV3Pool _pool, IOrderManager.LimitOrderParams memory params) external view
@@ -59,11 +61,11 @@ library UniswapUtils {
         require(_poolAddress != address(0));
 
         if (_weiAmount > 0) {
-            // consult the pool in the last TWAP_PERIOD
-            (int24 timeWeightedAverageTick,) = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
-            quote = OracleLibrary.getQuoteAtTick(
-                timeWeightedAverageTick, _toUint128(_weiAmount), WETH, KROM
-            );
+
+            (uint160 sqrtPriceX96, , , , , , ) = IUniswapV3Pool(_poolAddress).slot0();
+
+            uint256 price = (uint256(sqrtPriceX96).mul(uint256(sqrtPriceX96)).mul(1e6) >> (96 * 2));
+            quote = _weiAmount.mul(price).div(1e6);
         }
     }
 

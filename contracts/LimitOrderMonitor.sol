@@ -4,7 +4,7 @@ pragma solidity >=0.7.5;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/Initializable.sol";
 
 import "@chainlink/contracts/src/v0.7/interfaces/KeeperCompatibleInterface.sol";
 import "@chainlink/contracts/src/v0.7/interfaces/AggregatorV3Interface.sol";
@@ -16,7 +16,10 @@ import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
 
 /// @title  LimitOrderMonitor
-contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibleInterface {
+contract LimitOrderMonitor is
+    Initializable,
+    IOrderMonitor,
+    KeeperCompatibleInterface {
 
     using SafeMath for uint256;
 
@@ -33,8 +36,17 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     /// @dev tokenIds index per token id
     mapping (uint256 => uint256) public tokenIndexPerTokenId;
 
+    /// @dev batch info
+    mapping(uint256 => uint256) public override batchPayment;
+
     /// @dev tokens to monitor
     uint256[] public tokenIds;
+
+    /// @dev controller address; could be DAO
+    address public controller;
+
+    /// @dev keeper address; can do upkeep
+    address public keeper;
 
     /// @dev order manager
     IOrderManager public orderManager;
@@ -45,6 +57,9 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     /// @dev krom token
     IERC20 public KROM;
 
+    /// @dev last upkeep block
+    uint256 public lastUpkeep;
+
     /// @dev max batch size
     uint256 public batchSize;
 
@@ -54,17 +69,11 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     /// @dev interval between 2 upkeeps, in blocks
     uint256 public upkeepInterval;
 
-    /// @dev last upkeep block
-    uint256 public lastUpkeep;
-
     /// @dev batch count
     uint256 public batchCount;
 
     //  @dev keeper fee monitorFee / FEE_MULTIPLIER = x
     uint256 public monitorFee;
-
-    /// @dev batch info
-    mapping(uint256 => uint256) public override batchPayment;
 
     /// @dev only trade manager
     modifier onlyTradeManager() {
@@ -75,6 +84,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
     function initialize (IOrderManager _orderManager,
         IUniswapV3Factory _factory,
         IERC20 _KROM,
+        address _keeper,
         uint256 _batchSize,
         uint256 _monitorSize,
         uint256 _upkeepInterval,
@@ -94,7 +104,8 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         upkeepInterval = _upkeepInterval;
         monitorFee = _monitorFee;
 
-        OwnableUpgradeable.__Ownable_init();
+        controller = msg.sender;
+        keeper = _keeper;
 
         KROM.approve(address(orderManager), MAX_INT);
     }
@@ -119,7 +130,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         bytes memory performData
     ) {
 
-        if (upkeepNeeded = (block.number - lastUpkeep) > upkeepInterval) {
+        if (upkeepNeeded = (_getBlockNumber() - lastUpkeep) > upkeepInterval) {
             uint256 _tokenId;
             uint256[] memory batchTokenIds = new uint256[](batchSize);
             uint256 count;
@@ -127,8 +138,9 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
             // iterate through all active tokens;
             for (uint256 i = 0; i < tokenIds.length; i++) {
                 _tokenId = tokenIds[i];
-                upkeepNeeded = orderManager.canProcess(
-                    _tokenId, tx.gasprice > 0 ? tx.gasprice : 0
+                (upkeepNeeded,,) = orderManager.canProcess(
+                    _tokenId,
+                    _getGasPrice(tx.gasprice)
                 );
                 if (upkeepNeeded) {
                     batchTokenIds[count] = _tokenId;
@@ -150,10 +162,8 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         bytes calldata performData
     ) external override {
 
+        isAuthorizedKeeper();
         uint256 _gasUsed = gasleft();
-
-        bool validTrade;
-        uint256 validCount;
 
         batchCount++;
 
@@ -161,18 +171,25 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
             performData, (uint256[], uint256)
         );
 
-        uint256 _tokenId;
         uint256 paymentPaid;
-        for (uint256 i = 0; i < _count; i++) {
-            _tokenId = _tokenIds[i];
-            validTrade = orderManager.canProcess(_tokenId, tx.gasprice);
-            if (validTrade) {
-                validCount++;
-                _stopMonitor(_tokenId);
-                (,,uint256 _serviceFeePaid) = orderManager.processLimitOrder(
-                    _tokenId, batchCount
-                );
-                paymentPaid = paymentPaid.add(_serviceFeePaid);
+        uint256 validCount;
+
+        {
+            bool validTrade;
+            uint256 _serviceFee;
+            uint256 _monitorFee;
+            uint256 _tokenId;
+            for (uint256 i = 0; i < _count; i++) {
+                _tokenId = _tokenIds[i];
+                (validTrade, _serviceFee, _monitorFee) = orderManager.canProcess(_tokenId, tx.gasprice);
+                if (validTrade) {
+                    validCount++;
+                    _stopMonitor(_tokenId);
+                    orderManager.processLimitOrder(
+                        _tokenId, batchCount, _serviceFee, _monitorFee
+                    );
+                    paymentPaid = paymentPaid.add(_monitorFee);
+                }
             }
         }
 
@@ -181,7 +198,7 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         _gasUsed = _gasUsed - gasleft();
 
         // calculate the payment owed to the sender
-        uint256 paymentOwed = _calculatePaymentAmount(_gasUsed);
+        uint256 paymentOwed = _calculatePaymentAmount(_gasUsed, validCount);
         require(paymentPaid >= paymentOwed);
 
         batchPayment[batchCount] = paymentOwed.div(validCount);
@@ -200,31 +217,45 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         );
     }
 
-    function setBatchSize(uint256 _batchSize) external onlyOwner {
+    function setBatchSize(uint256 _batchSize) external {
 
+        isAuthorizedController();
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
         require(_batchSize <= monitorSize, "SIZE_MISMATCH");
 
         batchSize = _batchSize;
     }
 
-    function setMonitorSize(uint256 _monitorSize) external onlyOwner {
+    function setMonitorSize(uint256 _monitorSize) external {
 
+        isAuthorizedController();
         require(_monitorSize <= MAX_MONITOR_SIZE, "INVALID_MONITOR_SIZE");
         require(_monitorSize >= batchSize, "SIZE_MISMATCH");
 
         monitorSize = _monitorSize;
     }
 
-    function setUpkeepInterval(uint256 _upkeepInterval) external onlyOwner {
+    function setUpkeepInterval(uint256 _upkeepInterval) external  {
 
+        isAuthorizedController();
         upkeepInterval = _upkeepInterval;
     }
 
-    function setKeeperFee(uint256 _keeperFee) external onlyOwner {
+    function setKeeperFee(uint256 _keeperFee) external {
 
+        isAuthorizedController();
         require(_keeperFee <= FEE_MULTIPLIER, "INVALID_FEE");
         monitorFee = _keeperFee;
+    }
+
+    function changeController(address _controller) external {
+        isAuthorizedController();
+        controller = _controller;
+    }
+
+    function changeKeeper(address _keeper) external {
+        isAuthorizedController();
+        keeper = _keeper;
     }
 
     function _stopMonitor(uint256 _tokenId) internal {
@@ -238,10 +269,12 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
             delete tokenIndexPerTokenId[lastTokenId];
         } else if (tokenIndexToRemove != tokenIds.length) {
             tokenIndexPerTokenId[lastTokenId] = tokenIndexToRemove + 1;
+            delete tokenIndexPerTokenId[_tokenId];
         }
     }
 
-    function _calculatePaymentAmount(uint256 _gasUsed) internal view
+    // TODO override for ARB only uint256 paymentOwed = _calculatePaymentAmount(orderManager.gasUsageMonitor().mul(validCount));
+    function _calculatePaymentAmount(uint256 _gasUsed, uint256) internal virtual view
     returns (uint256 payment) {
 
         uint256 gasWei = tx.gasprice;
@@ -251,10 +284,30 @@ contract LimitOrderMonitor is OwnableUpgradeable, IOrderMonitor, KeeperCompatibl
         payment = orderManager.quoteKROM(_weiForGas);
     }
 
+    // TODO override for chainlink (use fast gas)
+    function _getGasPrice(uint256 _txnGasPrice) internal virtual view
+    returns (uint256 gasPrice) {
+        gasPrice = _txnGasPrice > 0 ? _txnGasPrice : 0;
+    }
+
+    // TODO (override block numbers for L2)
+    function _getBlockNumber() internal virtual view
+    returns (uint256 blockNumber) {
+        blockNumber = block.number;
+    }
+
     function _transferFees(uint256 _amount, address _owner) internal virtual {
         if (_amount > 0) {
             TransferHelper.safeTransfer(address(KROM), _owner, _amount);
         }
+    }
+
+    function isAuthorizedController() internal view {
+        require(msg.sender == controller);
+    }
+
+    function isAuthorizedKeeper() internal view {
+        require(msg.sender == keeper);
     }
 
     /// @notice Removes index element from the given array.

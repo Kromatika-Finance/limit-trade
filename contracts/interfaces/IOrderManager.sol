@@ -10,19 +10,21 @@ interface IOrderManager {
         address _token1; 
         uint24 _fee;
         uint160 _sqrtPriceX96;
-        uint256 _amount0;
-        uint256 _amount1;
+        uint128 _amount0;
+        uint128 _amount1;
     }
 
     function placeLimitOrder(LimitOrderParams calldata params) external payable returns (uint256 tokenId);
 
     function processLimitOrder(
-        uint256 _tokenId, uint256 _batchId
-    ) external returns (uint256, uint256, uint256);
+        uint256 _tokenId, uint256 _batchId, uint256 _serviceFee, uint256 _monitorFee
+    ) external returns (uint256, uint256);
 
-    function canProcess(uint256 _tokenId, uint256 gasPrice) external view returns (bool);
+    function canProcess(uint256 _tokenId, uint256 gasPrice) external view returns (bool, uint256, uint256);
 
     function quoteKROM(uint256 weiAmount) external view returns (uint256 quote);
 
     function funding(address owner) external view returns (uint256 balance);
+
+    function gasUsageMonitor() external view returns (uint256);
 }
