@@ -3,6 +3,8 @@
 pragma solidity >=0.7.5;
 pragma abicoder v2;
 
+import "@openzeppelin/contracts/math/SafeMath.sol";
+
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
 import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
@@ -17,6 +19,8 @@ import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
 import "./interfaces/IOrderManager.sol";
 
 library UniswapUtils {
+
+    using SafeMath for uint256;
 
     uint24 public constant POOL_FEE = 3000;
 
@@ -50,8 +54,7 @@ library UniswapUtils {
 
     }
 
-    function quoteKROM(IUniswapV3Factory factory, address WETH, address KROM,
-        uint256 _weiAmount, uint32 _twapPeriod)
+    function quoteKROM(IUniswapV3Factory factory, address WETH, address KROM, uint256 _weiAmount)
     public view returns (uint256 quote) {
 
         address _poolAddress = factory.getPool(WETH, KROM, POOL_FEE);
@@ -59,14 +62,10 @@ library UniswapUtils {
 
         if (_weiAmount > 0) {
 
-            // consult the pool in the last _twapPeriod
-            (int24 timeWeightedAverageTick,) = OracleLibrary.consult(
-                _poolAddress,
-                _twapPeriod
-            );
-            quote = OracleLibrary.getQuoteAtTick(
-                timeWeightedAverageTick, _toUint128(_weiAmount), WETH, KROM
-            );
+            (uint160 sqrtPriceX96, , , , , , ) = IUniswapV3Pool(_poolAddress).slot0();
+
+            uint256 price = (uint256(sqrtPriceX96).mul(uint256(sqrtPriceX96)).mul(1e6) >> (96 * 2));
+            quote = _weiAmount.mul(price).div(1e6);
         }
     }
 

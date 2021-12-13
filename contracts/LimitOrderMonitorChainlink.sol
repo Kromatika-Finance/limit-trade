@@ -30,16 +30,18 @@ contract LimitOrderMonitorChainlink is LimitOrderMonitor {
     function initialize(IOrderManager _orderManager,
         IUniswapV3Factory _factory,
         IERC20 _KROM,
-        uint24 _batchSize,
-        uint24 _monitorSize,
-        uint24 _upkeepInterval,
-        uint24 _monitorFee,
+        address _keeper,
+        uint256 _batchSize,
+        uint256 _monitorSize,
+        uint256 _upkeepInterval,
+        uint256 _monitorFee,
         ISwapRouter _swapRouter,
         IWETH9 _WETH,
         IERC20 _LINK) public initializer {
 
         super.initialize(
-            _orderManager, _factory, _KROM, _batchSize, _monitorSize, _upkeepInterval, _monitorFee
+            _orderManager, _factory, _KROM, _keeper,
+                _batchSize, _monitorSize, _upkeepInterval, _monitorFee
         );
 
         swapRouter = _swapRouter;

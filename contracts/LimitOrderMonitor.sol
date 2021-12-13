@@ -24,11 +24,11 @@ contract LimitOrderMonitor is
     using SafeMath for uint256;
 
     uint256 private constant MAX_INT = 2**256 - 1;
-    uint24 private constant FEE_MULTIPLIER = 100000;
-    uint24 private constant MAX_BATCH_SIZE = 100;
-    uint24 private constant MAX_MONITOR_SIZE = 10000;
+    uint256 private constant FEE_MULTIPLIER = 100000;
+    uint256 private constant MAX_BATCH_SIZE = 100;
+    uint256 private constant MAX_MONITOR_SIZE = 10000;
 
-    uint24 private constant MONITOR_OVERHEAD = 300000;
+    uint256 private constant MONITOR_OVERHEAD = 300000;
 
     event BatchProcessed(uint256 batchId, uint256 batchSize, uint256 gasUsed,
         uint256 paymentOwed, uint256 paymentPaid, bytes data);
@@ -45,6 +45,9 @@ contract LimitOrderMonitor is
     /// @dev controller address; could be DAO
     address public controller;
 
+    /// @dev keeper address; can do upkeep
+    address public keeper;
+
     /// @dev order manager
     IOrderManager public orderManager;
 
@@ -55,22 +58,22 @@ contract LimitOrderMonitor is
     IERC20 public KROM;
 
     /// @dev last upkeep block
-    uint128 public lastUpkeep;
+    uint256 public lastUpkeep;
 
     /// @dev max batch size
-    uint24 public batchSize;
+    uint256 public batchSize;
 
     /// @dev max monitor size
-    uint24 public monitorSize;
+    uint256 public monitorSize;
 
     /// @dev interval between 2 upkeeps, in blocks
-    uint24 public upkeepInterval;
+    uint256 public upkeepInterval;
 
     /// @dev batch count
-    uint176 public batchCount;
+    uint256 public batchCount;
 
     //  @dev keeper fee monitorFee / FEE_MULTIPLIER = x
-    uint24 public monitorFee;
+    uint256 public monitorFee;
 
     /// @dev only trade manager
     modifier onlyTradeManager() {
@@ -81,10 +84,11 @@ contract LimitOrderMonitor is
     function initialize (IOrderManager _orderManager,
         IUniswapV3Factory _factory,
         IERC20 _KROM,
-        uint24 _batchSize,
-        uint24 _monitorSize,
-        uint24 _upkeepInterval,
-        uint24 _monitorFee) public initializer {
+        address _keeper,
+        uint256 _batchSize,
+        uint256 _monitorSize,
+        uint256 _upkeepInterval,
+        uint256 _monitorFee) public initializer {
 
         require(_monitorFee <= FEE_MULTIPLIER, "INVALID_FEE");
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
@@ -101,6 +105,7 @@ contract LimitOrderMonitor is
         monitorFee = _monitorFee;
 
         controller = msg.sender;
+        keeper = _keeper;
 
         KROM.approve(address(orderManager), MAX_INT);
     }
@@ -133,7 +138,7 @@ contract LimitOrderMonitor is
             // iterate through all active tokens;
             for (uint256 i = 0; i < tokenIds.length; i++) {
                 _tokenId = tokenIds[i];
-                upkeepNeeded = orderManager.canProcess(
+                (upkeepNeeded,,) = orderManager.canProcess(
                     _tokenId,
                     _getGasPrice(tx.gasprice)
                 );
@@ -157,10 +162,8 @@ contract LimitOrderMonitor is
         bytes calldata performData
     ) external override {
 
+        isAuthorizedKeeper();
         uint256 _gasUsed = gasleft();
-
-        bool validTrade;
-        uint256 validCount;
 
         batchCount++;
 
@@ -168,18 +171,25 @@ contract LimitOrderMonitor is
             performData, (uint256[], uint256)
         );
 
-        uint256 _tokenId;
         uint256 paymentPaid;
-        for (uint256 i = 0; i < _count; i++) {
-            _tokenId = _tokenIds[i];
-            validTrade = orderManager.canProcess(_tokenId, tx.gasprice);
-            if (validTrade) {
-                validCount++;
-                _stopMonitor(_tokenId);
-                (,,uint256 _serviceFeePaid) = orderManager.processLimitOrder(
-                    _tokenId, batchCount
-                );
-                paymentPaid = paymentPaid.add(_serviceFeePaid);
+        uint256 validCount;
+
+        {
+            bool validTrade;
+            uint256 _serviceFee;
+            uint256 _monitorFee;
+            uint256 _tokenId;
+            for (uint256 i = 0; i < _count; i++) {
+                _tokenId = _tokenIds[i];
+                (validTrade, _serviceFee, _monitorFee) = orderManager.canProcess(_tokenId, tx.gasprice);
+                if (validTrade) {
+                    validCount++;
+                    _stopMonitor(_tokenId);
+                    orderManager.processLimitOrder(
+                        _tokenId, batchCount, _serviceFee, _monitorFee
+                    );
+                    paymentPaid = paymentPaid.add(_monitorFee);
+                }
             }
         }
 
@@ -192,7 +202,7 @@ contract LimitOrderMonitor is
         require(paymentPaid >= paymentOwed);
 
         batchPayment[batchCount] = paymentOwed.div(validCount);
-        lastUpkeep = uint128(block.number);
+        lastUpkeep = block.number;
 
         // send the paymentOwed to the sender
         _transferFees(paymentOwed, msg.sender);
@@ -207,7 +217,7 @@ contract LimitOrderMonitor is
         );
     }
 
-    function setBatchSize(uint24 _batchSize) external {
+    function setBatchSize(uint256 _batchSize) external {
 
         isAuthorizedController();
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
@@ -216,7 +226,7 @@ contract LimitOrderMonitor is
         batchSize = _batchSize;
     }
 
-    function setMonitorSize(uint24 _monitorSize) external {
+    function setMonitorSize(uint256 _monitorSize) external {
 
         isAuthorizedController();
         require(_monitorSize <= MAX_MONITOR_SIZE, "INVALID_MONITOR_SIZE");
@@ -225,13 +235,13 @@ contract LimitOrderMonitor is
         monitorSize = _monitorSize;
     }
 
-    function setUpkeepInterval(uint24 _upkeepInterval) external  {
+    function setUpkeepInterval(uint256 _upkeepInterval) external  {
 
         isAuthorizedController();
         upkeepInterval = _upkeepInterval;
     }
 
-    function setKeeperFee(uint24 _keeperFee) external {
+    function setKeeperFee(uint256 _keeperFee) external {
 
         isAuthorizedController();
         require(_keeperFee <= FEE_MULTIPLIER, "INVALID_FEE");
@@ -241,6 +251,11 @@ contract LimitOrderMonitor is
     function changeController(address _controller) external {
         isAuthorizedController();
         controller = _controller;
+    }
+
+    function changeKeeper(address _keeper) external {
+        isAuthorizedController();
+        keeper = _keeper;
     }
 
     function _stopMonitor(uint256 _tokenId) internal {
@@ -281,7 +296,6 @@ contract LimitOrderMonitor is
         blockNumber = block.number;
     }
 
-    // TODO for different transfers
     function _transferFees(uint256 _amount, address _owner) internal virtual {
         if (_amount > 0) {
             TransferHelper.safeTransfer(address(KROM), _owner, _amount);
@@ -290,6 +304,10 @@ contract LimitOrderMonitor is
 
     function isAuthorizedController() internal view {
         require(msg.sender == controller);
+    }
+
+    function isAuthorizedKeeper() internal view {
+        require(msg.sender == keeper);
     }
 
     /// @notice Removes index element from the given array.

@@ -17,10 +17,10 @@ interface IOrderManager {
     function placeLimitOrder(LimitOrderParams calldata params) external payable returns (uint256 tokenId);
 
     function processLimitOrder(
-        uint256 _tokenId, uint256 _batchId
-    ) external returns (uint256, uint256, uint256);
+        uint256 _tokenId, uint256 _batchId, uint256 _serviceFee, uint256 _monitorFee
+    ) external returns (uint256, uint256);
 
-    function canProcess(uint256 _tokenId, uint256 gasPrice) external view returns (bool);
+    function canProcess(uint256 _tokenId, uint256 gasPrice) external view returns (bool, uint256, uint256);
 
     function quoteKROM(uint256 weiAmount) external view returns (uint256 quote);
 
