@@ -13,6 +13,7 @@ import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3MintCallback.sol";
 import '@uniswap/v3-core/contracts/libraries/FixedPoint128.sol';
 import '@uniswap/v3-core/contracts/libraries/FullMath.sol';
+import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/CallbackValidation.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
@@ -20,8 +21,7 @@ import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
 import "./Multicall.sol";
-import "./UniswapUtils.sol";
-import "./WETHExtended.sol";
+import "./ManagerUtils.sol";
 
 /// @title  LimitOrderManager
 contract LimitOrderManager is
@@ -98,11 +98,14 @@ contract LimitOrderManager is
     /// @dev wrapper ETH
     IWETH9 public WETH;
 
-    /// @dev simple WETH adapter
-    WETHExtended public WETHExt;
+    /// @dev utils
+    ManagerUtils public utils;
 
     /// @dev univ3 factory
     IUniswapV3Factory public factory;
+
+    /// @dev quoter
+    IQuoter public quoter;
 
     /// @dev krom token
     IERC20 public KROM;
@@ -125,15 +128,16 @@ contract LimitOrderManager is
     /// @notice Initializes the smart contract instead of a constructorr
     /// @param  _factory univ3 factory
     /// @param  _WETH wrapped ETH
-    /// @param  _WETHExt adapter
+    /// @param  _utils limit manager utils
     /// @param  _KROM kromatika token
     /// @param  _feeAddress protocol fee address
     /// @param  _gasUsageMonitor estimated gas usage of monitors
     /// @param  _protocolFee charged fee
     function initialize(
             IUniswapV3Factory _factory,
+            IQuoter _quoter,
             IWETH9 _WETH,
-            WETHExtended _WETHExt,
+            ManagerUtils _utils,
             IERC20 _KROM,
             address _feeAddress,
             uint256 _gasUsageMonitor,
@@ -141,9 +145,10 @@ contract LimitOrderManager is
     ) public initializer {
 
         factory = _factory;
+        utils = _utils;
         WETH = _WETH;
-        WETHExt = _WETHExt;
         KROM = _KROM;
+        quoter = _quoter;
 
         gasUsageMonitor = _gasUsageMonitor;
         protocolFee = _protocolFee;
@@ -159,6 +164,8 @@ contract LimitOrderManager is
         public payable override virtual returns (
             uint256 _tokenId
         ) {
+
+        require(params._token0 < params._token1);
 
         int24 _tickLower;
         int24 _tickUpper;
@@ -177,7 +184,12 @@ contract LimitOrderManager is
         require (_poolAddress != address(0));
         _pool = IUniswapV3Pool(_poolAddress);
 
-        (_tickLower, _tickUpper, _liquidity, _orderType) = UniswapUtils.calculateLimitTicks(_pool, params);
+        (_tickLower, _tickUpper, _liquidity, _orderType) = utils.calculateLimitTicks(
+            _pool,
+            params._sqrtPriceX96,
+            params._amount0,
+            params._amount1
+        );
         _pool.mint(
             address(this),
             _tickLower,
@@ -397,7 +409,7 @@ contract LimitOrderManager is
         );
     }
 
-    function canProcess(uint256 _tokenId, uint256 _gasPrice) external view override
+    function canProcess(uint256 _tokenId, uint256 _gasPrice) external override
     returns (bool underfunded, uint256 _serviceFee, uint256 _monitorFee) {
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
@@ -408,7 +420,7 @@ contract LimitOrderManager is
             underfunded = false;
         } else {
             (uint256 amount0, uint256 amount1) =
-                UniswapUtils._amountsForLiquidity(
+                utils._amountsForLiquidity(
                     limitOrder.pool,
                     limitOrder.tickLower,
                     limitOrder.tickUpper,
@@ -430,7 +442,7 @@ contract LimitOrderManager is
     
     }
 
-    function isUnderfunded(address _owner) public view returns (
+    function isUnderfunded(address _owner) public returns (
         bool underfunded, uint256 amount, uint256 _serviceFee, uint256 _monitorFee
     ) {
         uint256 _targetGasPrice = targetGasPrice[_owner];
@@ -482,17 +494,18 @@ contract LimitOrderManager is
         return monitors.length;
     }
 
-    function quoteKROM(uint256 _weiAmount) public view override returns (uint256 quote) {
+    function quoteKROM(uint256 _weiAmount) public override returns (uint256 quote) {
 
-        return UniswapUtils.quoteKROM(
+        return utils.quoteKROM(
             factory,
+            quoter,
             address(WETH),
             address(KROM),
             _weiAmount
         );
     }
 
-    function serviceFee(address _owner) public view returns (uint256 _serviceFee) {
+    function serviceFee(address _owner) public returns (uint256 _serviceFee) {
 
         (_serviceFee,) = estimateServiceFee(
             targetGasPrice[_owner],
@@ -504,7 +517,7 @@ contract LimitOrderManager is
     function estimateServiceFee(
         uint256 _targetGasPrice,
         uint256 _noOrders,
-        address _owner) public view virtual
+        address) public virtual
     returns (uint256 _serviceFee, uint256 _monitorFee) {
 
         _monitorFee = quoteKROM(
@@ -583,8 +596,8 @@ contract LimitOrderManager is
         if (_amount > 0) {
             if (_token == address(WETH)) {
                 // if token is WETH, withdraw and send back ETH
-                WETH.transfer(address(WETHExt), _amount);
-                WETHExt.withdraw(_amount, _to, WETH);
+                WETH.transfer(address(utils), _amount);
+                utils.withdraw(_amount, _to, WETH);
             } else {
                 TransferHelper.safeTransfer(_token, _to, _amount);
             }
