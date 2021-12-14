@@ -24,20 +24,14 @@ contract LimitOrderMonitor is
     using SafeMath for uint256;
 
     uint256 private constant MAX_INT = 2**256 - 1;
-    uint256 private constant FEE_MULTIPLIER = 100000;
     uint256 private constant MAX_BATCH_SIZE = 100;
     uint256 private constant MAX_MONITOR_SIZE = 10000;
 
-    uint256 private constant MONITOR_OVERHEAD = 300000;
-
     event BatchProcessed(uint256 batchId, uint256 batchSize, uint256 gasUsed,
-        uint256 paymentOwed, uint256 paymentPaid, bytes data);
+        uint256 paymentPaid, bytes data);
 
     /// @dev tokenIds index per token id
     mapping (uint256 => uint256) public tokenIndexPerTokenId;
-
-    /// @dev batch info
-    mapping(uint256 => uint256) public override batchPayment;
 
     /// @dev tokens to monitor
     uint256[] public tokenIds;
@@ -72,9 +66,6 @@ contract LimitOrderMonitor is
     /// @dev batch count
     uint256 public batchCount;
 
-    //  @dev keeper fee monitorFee / FEE_MULTIPLIER = x
-    uint256 public monitorFee;
-
     /// @dev only trade manager
     modifier onlyTradeManager() {
         require(msg.sender == address(orderManager), "NOT_TRADE_MANAGER");
@@ -87,10 +78,8 @@ contract LimitOrderMonitor is
         address _keeper,
         uint256 _batchSize,
         uint256 _monitorSize,
-        uint256 _upkeepInterval,
-        uint256 _monitorFee) public initializer {
+        uint256 _upkeepInterval) public initializer {
 
-        require(_monitorFee <= FEE_MULTIPLIER, "INVALID_FEE");
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
         require(_monitorSize <= MAX_MONITOR_SIZE, "INVALID_MONITOR_SIZE");
         require(_batchSize <= _monitorSize, "SIZE_MISMATCH");
@@ -102,7 +91,6 @@ contract LimitOrderMonitor is
         batchSize = _batchSize;
         monitorSize = _monitorSize;
         upkeepInterval = _upkeepInterval;
-        monitorFee = _monitorFee;
 
         controller = msg.sender;
         keeper = _keeper;
@@ -196,22 +184,15 @@ contract LimitOrderMonitor is
         require(validCount > 0);
 
         _gasUsed = _gasUsed - gasleft();
-
-        // calculate the payment owed to the sender
-        uint256 paymentOwed = _calculatePaymentAmount(_gasUsed, validCount);
-        require(paymentPaid >= paymentOwed);
-
-        batchPayment[batchCount] = paymentOwed.div(validCount);
         lastUpkeep = block.number;
 
-        // send the paymentOwed to the sender
-        _transferFees(paymentOwed, msg.sender);
+        // send the paymentPaid to the sender
+        _transferFees(paymentPaid, msg.sender);
 
         emit BatchProcessed(
             batchCount,
             validCount,
             _gasUsed,
-            paymentOwed,
             paymentPaid,
             performData
         );
@@ -241,13 +222,6 @@ contract LimitOrderMonitor is
         upkeepInterval = _upkeepInterval;
     }
 
-    function setKeeperFee(uint256 _keeperFee) external {
-
-        isAuthorizedController();
-        require(_keeperFee <= FEE_MULTIPLIER, "INVALID_FEE");
-        monitorFee = _keeperFee;
-    }
-
     function changeController(address _controller) external {
         isAuthorizedController();
         controller = _controller;
@@ -271,17 +245,6 @@ contract LimitOrderMonitor is
             tokenIndexPerTokenId[lastTokenId] = tokenIndexToRemove + 1;
             delete tokenIndexPerTokenId[_tokenId];
         }
-    }
-
-    // TODO override for ARB only uint256 paymentOwed = _calculatePaymentAmount(orderManager.gasUsageMonitor().mul(validCount));
-    function _calculatePaymentAmount(uint256 _gasUsed, uint256) internal virtual view
-    returns (uint256 payment) {
-
-        uint256 gasWei = tx.gasprice;
-        uint256 _weiForGas = gasWei.mul(_gasUsed.add(MONITOR_OVERHEAD));
-        _weiForGas = _weiForGas.mul(FEE_MULTIPLIER.add(monitorFee)).div(FEE_MULTIPLIER);
-
-        payment = orderManager.quoteKROM(_weiForGas);
     }
 
     // TODO override for chainlink (use fast gas)

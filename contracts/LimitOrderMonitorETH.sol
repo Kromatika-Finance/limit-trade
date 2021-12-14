@@ -30,7 +30,6 @@ contract LimitOrderMonitorETH is LimitOrderMonitor {
         uint256 _batchSize,
         uint256 _monitorSize,
         uint256 _upkeepInterval,
-        uint256 _monitorFee,
         ISwapRouter _swapRouter,
         IWETH9 _WETH,
         WETHExtended _WETHExt
@@ -38,7 +37,7 @@ contract LimitOrderMonitorETH is LimitOrderMonitor {
 
         super.initialize(
             _orderManager, _factory, _KROM, _keeper,
-                _batchSize, _monitorSize, _upkeepInterval, _monitorFee
+                _batchSize, _monitorSize, _upkeepInterval
         );
 
         swapRouter = _swapRouter;

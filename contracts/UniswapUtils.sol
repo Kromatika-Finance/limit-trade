@@ -62,6 +62,7 @@ library UniswapUtils {
 
         if (_weiAmount > 0) {
 
+            // TODO find better way for oracle
             (uint160 sqrtPriceX96, , , , , , ) = IUniswapV3Pool(_poolAddress).slot0();
 
             uint256 price = (uint256(sqrtPriceX96).mul(uint256(sqrtPriceX96)).mul(1e6) >> (96 * 2));

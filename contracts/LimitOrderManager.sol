@@ -42,12 +42,10 @@ contract LimitOrderManager is
         uint128 liquidity;
         uint256 opened;
         uint256 processed;
-        uint256 batchId;
-        uint256 monitorFeePaid;
         uint256 feeGrowthInside0LastX128;
         uint256 feeGrowthInside1LastX128;
-        uint256 tokensOwed0;
-        uint256 tokensOwed1;
+        uint128 tokensOwed0;
+        uint128 tokensOwed1;
     }
 
      struct MintCallbackData {
@@ -68,7 +66,7 @@ contract LimitOrderManager is
 
     /// @dev fired when an order is collected
     event LimitOrderCollected(address indexed owner, uint256 indexed tokenId,
-        uint256 tokensOwed0, uint256 tokensOwed1, uint256 payment);
+        uint256 tokensOwed0, uint256 tokensOwed1);
 
     /// @dev fired when a new funding is made
     event FundingAdded(address indexed from, uint256 amount);
@@ -208,8 +206,6 @@ contract LimitOrderManager is
                 liquidity: _liquidity,
                 opened: _blockNumber(),
                 processed: 0,
-                batchId: 0,
-                monitorFeePaid: 0,
                 feeGrowthInside0LastX128: _feeGrowthInside0LastX128,
                 feeGrowthInside1LastX128: _feeGrowthInside1LastX128,
                 tokensOwed0: params._amount0,
@@ -231,26 +227,30 @@ contract LimitOrderManager is
         );
     }
 
-    function processLimitOrder(uint256 _tokenId, uint256 _batchId,
-        uint256 _serviceFeePaid, uint256 _monitorFeePaid) external override
-        returns (uint256 _amount0, uint256 _amount1) {
+    function processLimitOrder(
+        uint256 _tokenId, uint256 _batchId,
+        uint256 _serviceFeePaid, uint256 _monitorFeePaid
+    ) external override
+        returns (uint128 _amount0, uint128 _amount1) {
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
         require(msg.sender == address(limitOrder.monitor));
         require(limitOrder.processed == 0);
 
-        // update the state
-        limitOrder.batchId = _batchId;
-        (_amount0, _amount1) = _updateLimitOrder(limitOrder);
+        // remove liqudiity
+        (_amount0, _amount1) = _removeLiquidity(limitOrder);
+
+        limitOrder.processed = _blockNumber();
+        limitOrder.tokensOwed0 = _amount0;
+        limitOrder.tokensOwed1 = _amount1;
+        limitOrder.liquidity = 0;
 
         address _owner = ownerOf(_tokenId);
-        // send service fee for this order to the monitor based on the target gas price set
-
-        uint256 _protocolFeePaid = _serviceFeePaid.sub(_monitorFeePaid);
 
         // update balance
         uint256 balance = funding[_owner];
-
+        // send service fee for this order to the monitor based on the target gas price set
+        uint256 _protocolFeePaid = _serviceFeePaid.sub(_monitorFeePaid);
         // reduce balance by the service fee
         balance = balance.sub(_serviceFeePaid);
         funding[_owner] = balance;
@@ -258,10 +258,18 @@ contract LimitOrderManager is
         // reduce activeOrders
         activeOrders[_owner] = activeOrders[_owner].sub(1);
 
-        // update what was paid to the monitors
-        limitOrder.monitorFeePaid = _monitorFeePaid;
+        // collect the funds
+        _collect(
+            _tokenId,
+            limitOrder.pool,
+            limitOrder.tickLower,
+            limitOrder.tickUpper,
+            limitOrder.tokensOwed0,
+            limitOrder.tokensOwed1,
+            _owner
+        );
 
-        // send to monitor and fee address
+        // send fees to monitor and protocol
         _transferTokenTo(address(KROM), _monitorFeePaid, msg.sender);
         _transferTokenTo(address(KROM), _protocolFeePaid, feeAddress);
 
@@ -278,22 +286,38 @@ contract LimitOrderManager is
         LimitOrder storage limitOrder = limitOrders[_tokenId];
         require(limitOrder.processed == 0);
 
-        (_amount0, _amount1) = _updateLimitOrder(limitOrder);
+        (_amount0, _amount1) = _removeLiquidity(limitOrder);
 
         activeOrders[msg.sender] = activeOrders[msg.sender].sub(1);
+
+        // burn the token
+        _burn(_tokenId);
 
         // stop monitor
         limitOrder.monitor.stopMonitor(_tokenId);
         // collect the funds
-        _collect(_tokenId, msg.sender);
+        _collect(
+            _tokenId,
+            limitOrder.pool,
+            limitOrder.tickLower,
+            limitOrder.tickUpper,
+            limitOrder.tokensOwed0,
+            limitOrder.tokensOwed1,
+            msg.sender
+        );
 
+        delete limitOrders[_tokenId];
         emit LimitOrderCancelled(msg.sender, _tokenId, _amount0, _amount1);
     }
 
-    function collect(uint256 _tokenId) external {
+    function burn(uint256 _tokenId) external {
 
         isAuthorizedForToken(_tokenId);
-        _collect(_tokenId, msg.sender);
+        // remove information related to tokenId
+        require(limitOrders[_tokenId].processed > 0);
+
+        delete limitOrders[_tokenId];
+        _burn(_tokenId);
     }
 
     function addFunding(uint256 _amount) external {
@@ -492,58 +516,32 @@ contract LimitOrderManager is
         .div(PROTOCOL_FEE_MULTIPLIER);
     }
 
-    function _collect(uint256 _tokenId, address _owner) internal returns
+    function _collect(
+        uint256 _tokenId,
+        IUniswapV3Pool _pool,
+        int24 _tickLower,
+        int24 _tickUpper,
+        uint128 _tokensOwed0,
+        uint128 _tokensOwed1,
+        address _owner
+    ) internal returns
         (uint256 _tokensToSend0, uint256 _tokensToSend1) {
 
-        LimitOrder storage limitOrder = limitOrders[_tokenId];
-        require(limitOrder.processed > 0);
-
         (_tokensToSend0, _tokensToSend1) =
-            limitOrder.pool.collect(
+            _pool.collect(
                 address(this),
-                limitOrder.tickLower,
-                limitOrder.tickUpper,
-                _toUint128(limitOrder.tokensOwed0),
-                _toUint128(limitOrder.tokensOwed1)
+                 _tickLower,
+                _tickUpper,
+                _tokensOwed0,
+                _tokensOwed1
             );
 
         require(_tokensToSend0 > 0 || _tokensToSend1 > 0);
 
-        // refund
-        uint256 payment = limitOrder.monitor.batchPayment(
-            limitOrder.batchId
-        );
+        _transferTokenTo(_pool.token0(), _tokensToSend0, _owner);
+        _transferTokenTo(_pool.token1(), _tokensToSend1, _owner);
 
-        if (limitOrder.monitorFeePaid > payment) {
-
-            uint256 balance = funding[_owner];
-            uint256 monitorBalance =  KROM.balanceOf(address(limitOrder.monitor));
-            uint256 _amountToTopUp = limitOrder.monitorFeePaid.sub(payment);
-
-            _amountToTopUp = _amountToTopUp > monitorBalance
-                ? monitorBalance
-                : _amountToTopUp;
-
-            balance = balance.add(_amountToTopUp);
-            funding[_owner] = balance;
-
-            // top-up from the monitor
-            TransferHelper.safeTransferFrom(
-                address(KROM),
-                address(limitOrder.monitor),
-                address(this),
-                _amountToTopUp
-            );
-        }
-
-        _transferTokenTo(limitOrder.pool.token0(), _tokensToSend0, _owner);
-        _transferTokenTo(limitOrder.pool.token1(), _tokensToSend1, _owner);
-
-        // remove information related to tokenId
-        delete limitOrders[_tokenId];
-        _burn(_tokenId);
-
-        emit LimitOrderCollected(_owner, _tokenId, _tokensToSend0, _tokensToSend1, payment);
+        emit LimitOrderCollected(_owner, _tokenId, _tokensToSend0, _tokensToSend1);
     }
 
     function _selectMonitor() internal returns (IOrderMonitor _monitor) {
@@ -594,24 +592,22 @@ contract LimitOrderManager is
     }
 
 
-    function _updateLimitOrder(LimitOrder storage limitOrder)
+    function _removeLiquidity(LimitOrder storage limitOrder)
     internal
     returns (
-        uint256 amount0,
-        uint256 amount1
+        uint128 tokensOwed0,
+        uint128 tokensOwed1
     ) {
 
-        limitOrder.processed = _blockNumber();
-
         if (limitOrder.liquidity > 0) {
-            (amount0, amount1) = limitOrder.pool.burn(
+            (uint256 amount0, uint256 amount1) = limitOrder.pool.burn(
                 limitOrder.tickLower, limitOrder.tickUpper, limitOrder.liquidity
             );
 
             bytes32 positionKey = PositionKey.compute(address(this), limitOrder.tickLower, limitOrder.tickUpper);
             (, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, , ) = limitOrder.pool.positions(positionKey);
 
-            amount0 = amount0.add(
+            tokensOwed0 = uint128(amount0) + uint128(
                 FullMath.mulDiv(
                     feeGrowthInside0LastX128 - limitOrder.feeGrowthInside0LastX128,
                     limitOrder.liquidity,
@@ -619,20 +615,14 @@ contract LimitOrderManager is
                 )
             );
 
-            amount1 = amount1.add(
+            tokensOwed1 = uint128(amount1) + uint128(
                 FullMath.mulDiv(
                     feeGrowthInside1LastX128 - limitOrder.feeGrowthInside1LastX128,
                     limitOrder.liquidity,
                     FixedPoint128.Q128
                 )
             );
-            limitOrder.liquidity = 0;
         }
-
-        // no liquidity for this position anymore
-        limitOrder.tokensOwed0 = amount0;
-        limitOrder.tokensOwed1 = amount1;
-
     }
 
     function _blockNumber() internal view returns (uint256) {
