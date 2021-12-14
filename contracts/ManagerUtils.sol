@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 
 pragma solidity >=0.7.5;
-pragma abicoder v2;
+
+import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
 
+import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
 import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
@@ -18,14 +20,25 @@ import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
 import "./interfaces/IOrderManager.sol";
 
-library UniswapUtils {
+// use library ?
+contract ManagerUtils {
 
     using SafeMath for uint256;
 
     uint24 public constant POOL_FEE = 3000;
 
+    function withdraw(uint wad, address _beneficiary, IWETH9 WETH) public {
+
+        WETH.withdraw(wad);
+        TransferHelper.safeTransferETH(_beneficiary, wad);
+    }
+
     function calculateLimitTicks(
-        IUniswapV3Pool _pool, IOrderManager.LimitOrderParams memory params) external view
+        IUniswapV3Pool _pool,
+        uint160 _sqrtPriceX96,
+        uint256 _amount0,
+        uint256 _amount1
+    ) external view
     returns (
         int24 _lowerTick,
         int24 _upperTick,
@@ -36,36 +49,32 @@ library UniswapUtils {
         int24 tickSpacing = _pool.tickSpacing();
         (uint160 sqrtRatioX96,, , , , , ) = _pool.slot0();
 
-        int24 _targetTick = TickMath.getTickAtSqrtRatio(params._sqrtPriceX96);
+        int24 _targetTick = TickMath.getTickAtSqrtRatio(_sqrtPriceX96);
 
         int24 tickFloor = _floor(_targetTick, tickSpacing);
-        int24 tickCeil = tickFloor + tickSpacing;
 
         return _checkLiquidityRange(
-            tickFloor - tickSpacing, 
+            tickFloor - tickSpacing,
             tickFloor,
-            tickCeil, 
-            tickCeil + tickSpacing,
-            params._amount0,
-            params._amount1,
-            sqrtRatioX96, 
+            tickFloor,
+            tickFloor + tickSpacing,
+            _amount0,
+            _amount1,
+            sqrtRatioX96,
             tickSpacing
         );
 
     }
 
-    function quoteKROM(IUniswapV3Factory factory, address WETH, address KROM, uint256 _weiAmount)
-    public view returns (uint256 quote) {
+    function quoteKROM(IUniswapV3Factory factory, IQuoter quoter, address WETH, address KROM, uint256 _weiAmount)
+    public returns (uint256 quote) {
 
         address _poolAddress = factory.getPool(WETH, KROM, POOL_FEE);
         require(_poolAddress != address(0));
 
         if (_weiAmount > 0) {
 
-            (uint160 sqrtPriceX96, , , , , , ) = IUniswapV3Pool(_poolAddress).slot0();
-
-            uint256 price = (uint256(sqrtPriceX96).mul(uint256(sqrtPriceX96)).mul(1e6) >> (96 * 2));
-            quote = _weiAmount.mul(price).div(1e6);
+            quote = quoter.quoteExactInputSingle(WETH, KROM, POOL_FEE, _weiAmount, 0);
         }
     }
 
@@ -147,4 +156,6 @@ library UniswapUtils {
         if (tick < 0 && tick % _tickSpacing != 0) compressed--;
         return compressed * _tickSpacing;
     }
+
+    receive() external payable {}
 }
