@@ -18,6 +18,8 @@
     "deploy-opt": "npm run truffle:deploy --network=optimism",
     "truffle:deploy": "truffle migrate --reset --compile-all --network $npm_config_network",
     "deploy-reset": "truffle migrate --reset --compile-all",
+    "deploy-local-dapp": "npm run truffle:deploy:dapp --network=development",
+    "deploy-opt-dapp": "npm run truffle:deploy:dapp --network=optimism",
     "truffle:deploy:token": "truffle migrate --compile-all  -f 2 --to 2 --network $npm_config_network",
     "truffle:deploy:dapp": "truffle migrate --compile-all  -f 3 --network $npm_config_network",
     "lint": "solhint contracts/*.sol --formatter stylish",
