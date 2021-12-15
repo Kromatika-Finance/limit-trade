@@ -6,7 +6,6 @@ const {deployProxy} = require("@openzeppelin/truffle-upgrades");
 module.exports = async function (deployer, network, accounts) {
 
   const uniswapFactory = process.env.UNISWAP_FACTORY;
-  const router = process.env.UNISWAP_ROUTER;
 
   const limitOrderManagerInstance = await LimitOrderManager.deployed();
   const kromatikaInstance = await Kromatika.deployed();
@@ -15,7 +14,7 @@ module.exports = async function (deployer, network, accounts) {
   // monitorFee = 20 % (this needs to be in a global config); the same % should be applied in the estimation
   await deployProxy(LimitOrderMonitor,
       [limitOrderManagerInstance.address, uniswapFactory, kromatikaInstance.address, accounts[0],
-        10, 100, 1, 20000],
+        20, 100, 1],
       {deployer});
 
   const limitOrderMonitorInstance = await LimitOrderMonitor.deployed()

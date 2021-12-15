@@ -23,8 +23,9 @@ contract OpLimitOrderManager is LimitOrderManager {
 
     /// @notice Initializes the smart contract instead of a constructor
     /// @param  _factory univ3 factory
+    /// @param  _quoter univ3 quoter
     /// @param  _WETH wrapped ETH
-    /// @param  _WETHExt adapter
+    /// @param  _utils limit manager utils
     /// @param  _KROM kromatika token
     /// @param  _feeAddress protocol fee address
     /// @param  _gasUsageMonitor estimated gas usage of monitors
@@ -32,8 +33,9 @@ contract OpLimitOrderManager is LimitOrderManager {
     /// @param  _protocolFeeDiscount discount applied on the protocol fee
     function initialize(
         IUniswapV3Factory _factory,
+        IQuoter _quoter,
         IWETH9 _WETH,
-        WETHExtended _WETHExt,
+        ManagerUtils _utils,
         IERC20 _KROM,
         IERC721 _OPAccessToken,
         address _feeAddress,
@@ -47,7 +49,7 @@ contract OpLimitOrderManager is LimitOrderManager {
         protocolFeeDiscount = _protocolFeeDiscount;
 
         super.initialize(
-            _factory, _WETH, _WETHExt, _KROM,
+            _factory, _quoter, _WETH, _utils, _KROM,
             _feeAddress, _gasUsageMonitor, _protocolFee
         );
     }
@@ -69,7 +71,7 @@ contract OpLimitOrderManager is LimitOrderManager {
     function estimateServiceFee(
         uint256 _targetGasPrice,
         uint256 _noOrders,
-        address _owner) public view override virtual
+        address _owner) public override virtual
     returns (uint256 _serviceFee, uint256 _monitorFee) {
 
         (_serviceFee,_monitorFee) = super.estimateServiceFee(
