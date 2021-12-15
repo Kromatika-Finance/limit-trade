@@ -13,6 +13,7 @@ import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3MintCallback.sol";
 import '@uniswap/v3-core/contracts/libraries/FixedPoint128.sol';
 import '@uniswap/v3-core/contracts/libraries/FullMath.sol';
+import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/CallbackValidation.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
@@ -20,8 +21,7 @@ import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
 import "./Multicall.sol";
-import "./UniswapUtils.sol";
-import "./WETHExtended.sol";
+import "./ManagerUtils.sol";
 
 /// @title  LimitOrderManager
 contract LimitOrderManager is
@@ -42,12 +42,10 @@ contract LimitOrderManager is
         uint128 liquidity;
         uint256 opened;
         uint256 processed;
-        uint256 batchId;
-        uint256 monitorFeePaid;
         uint256 feeGrowthInside0LastX128;
         uint256 feeGrowthInside1LastX128;
-        uint256 tokensOwed0;
-        uint256 tokensOwed1;
+        uint128 tokensOwed0;
+        uint128 tokensOwed1;
     }
 
      struct MintCallbackData {
@@ -68,7 +66,7 @@ contract LimitOrderManager is
 
     /// @dev fired when an order is collected
     event LimitOrderCollected(address indexed owner, uint256 indexed tokenId,
-        uint256 tokensOwed0, uint256 tokensOwed1, uint256 payment);
+        uint256 tokensOwed0, uint256 tokensOwed1);
 
     /// @dev fired when a new funding is made
     event FundingAdded(address indexed from, uint256 amount);
@@ -76,14 +74,8 @@ contract LimitOrderManager is
     /// @dev fired when funding is withdrawn
     event FundingWithdrawn(address indexed from, uint256 amount);
 
-    /// @dev target gas price
-    event TargetGasPriceSet(address indexed from, uint256 gasPrice);
-
     /// @dev funding
     mapping(address => uint256) public override funding;
-
-    /// @dev gas price
-    mapping(address => uint256) public targetGasPrice;
 
     /// @dev active orders
     mapping(address => uint256) public activeOrders;
@@ -100,11 +92,14 @@ contract LimitOrderManager is
     /// @dev wrapper ETH
     IWETH9 public WETH;
 
-    /// @dev simple WETH adapter
-    WETHExtended public WETHExt;
+    /// @dev utils
+    ManagerUtils public utils;
 
     /// @dev univ3 factory
     IUniswapV3Factory public factory;
+
+    /// @dev quoter
+    IQuoter public quoter;
 
     /// @dev krom token
     IERC20 public KROM;
@@ -127,15 +122,16 @@ contract LimitOrderManager is
     /// @notice Initializes the smart contract instead of a constructorr
     /// @param  _factory univ3 factory
     /// @param  _WETH wrapped ETH
-    /// @param  _WETHExt adapter
+    /// @param  _utils limit manager utils
     /// @param  _KROM kromatika token
     /// @param  _feeAddress protocol fee address
     /// @param  _gasUsageMonitor estimated gas usage of monitors
     /// @param  _protocolFee charged fee
     function initialize(
             IUniswapV3Factory _factory,
+            IQuoter _quoter,
             IWETH9 _WETH,
-            WETHExtended _WETHExt,
+            ManagerUtils _utils,
             IERC20 _KROM,
             address _feeAddress,
             uint256 _gasUsageMonitor,
@@ -143,9 +139,10 @@ contract LimitOrderManager is
     ) public initializer {
 
         factory = _factory;
+        utils = _utils;
         WETH = _WETH;
-        WETHExt = _WETHExt;
         KROM = _KROM;
+        quoter = _quoter;
 
         gasUsageMonitor = _gasUsageMonitor;
         protocolFee = _protocolFee;
@@ -161,6 +158,8 @@ contract LimitOrderManager is
         public payable override virtual returns (
             uint256 _tokenId
         ) {
+
+        require(params._token0 < params._token1);
 
         int24 _tickLower;
         int24 _tickUpper;
@@ -179,7 +178,12 @@ contract LimitOrderManager is
         require (_poolAddress != address(0));
         _pool = IUniswapV3Pool(_poolAddress);
 
-        (_tickLower, _tickUpper, _liquidity, _orderType) = UniswapUtils.calculateLimitTicks(_pool, params);
+        (_tickLower, _tickUpper, _liquidity, _orderType) = utils.calculateLimitTicks(
+            _pool,
+            params._sqrtPriceX96,
+            params._amount0,
+            params._amount1
+        );
         _pool.mint(
             address(this),
             _tickLower,
@@ -208,8 +212,6 @@ contract LimitOrderManager is
                 liquidity: _liquidity,
                 opened: _blockNumber(),
                 processed: 0,
-                batchId: 0,
-                monitorFeePaid: 0,
                 feeGrowthInside0LastX128: _feeGrowthInside0LastX128,
                 feeGrowthInside1LastX128: _feeGrowthInside1LastX128,
                 tokensOwed0: params._amount0,
@@ -231,26 +233,30 @@ contract LimitOrderManager is
         );
     }
 
-    function processLimitOrder(uint256 _tokenId, uint256 _batchId,
-        uint256 _serviceFeePaid, uint256 _monitorFeePaid) external override
-        returns (uint256 _amount0, uint256 _amount1) {
+    function processLimitOrder(
+        uint256 _tokenId, uint256 _batchId,
+        uint256 _serviceFeePaid, uint256 _monitorFeePaid
+    ) external override
+        returns (uint128 _amount0, uint128 _amount1) {
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
         require(msg.sender == address(limitOrder.monitor));
         require(limitOrder.processed == 0);
 
-        // update the state
-        limitOrder.batchId = _batchId;
-        (_amount0, _amount1) = _updateLimitOrder(limitOrder);
+        // remove liqudiity
+        (_amount0, _amount1) = _removeLiquidity(limitOrder);
+
+        limitOrder.processed = _blockNumber();
+        limitOrder.tokensOwed0 = _amount0;
+        limitOrder.tokensOwed1 = _amount1;
+        limitOrder.liquidity = 0;
 
         address _owner = ownerOf(_tokenId);
-        // send service fee for this order to the monitor based on the target gas price set
-
-        uint256 _protocolFeePaid = _serviceFeePaid.sub(_monitorFeePaid);
 
         // update balance
         uint256 balance = funding[_owner];
-
+        // send service fee for this order to the monitor based on the target gas price set
+        uint256 _protocolFeePaid = _serviceFeePaid.sub(_monitorFeePaid);
         // reduce balance by the service fee
         balance = balance.sub(_serviceFeePaid);
         funding[_owner] = balance;
@@ -258,10 +264,18 @@ contract LimitOrderManager is
         // reduce activeOrders
         activeOrders[_owner] = activeOrders[_owner].sub(1);
 
-        // update what was paid to the monitors
-        limitOrder.monitorFeePaid = _monitorFeePaid;
+        // collect the funds
+        _collect(
+            _tokenId,
+            limitOrder.pool,
+            limitOrder.tickLower,
+            limitOrder.tickUpper,
+            limitOrder.tokensOwed0,
+            limitOrder.tokensOwed1,
+            _owner
+        );
 
-        // send to monitor and fee address
+        // send fees to monitor and protocol
         _transferTokenTo(address(KROM), _monitorFeePaid, msg.sender);
         _transferTokenTo(address(KROM), _protocolFeePaid, feeAddress);
 
@@ -278,22 +292,38 @@ contract LimitOrderManager is
         LimitOrder storage limitOrder = limitOrders[_tokenId];
         require(limitOrder.processed == 0);
 
-        (_amount0, _amount1) = _updateLimitOrder(limitOrder);
+        (_amount0, _amount1) = _removeLiquidity(limitOrder);
 
         activeOrders[msg.sender] = activeOrders[msg.sender].sub(1);
+
+        // burn the token
+        _burn(_tokenId);
 
         // stop monitor
         limitOrder.monitor.stopMonitor(_tokenId);
         // collect the funds
-        _collect(_tokenId, msg.sender);
+        _collect(
+            _tokenId,
+            limitOrder.pool,
+            limitOrder.tickLower,
+            limitOrder.tickUpper,
+            limitOrder.tokensOwed0,
+            limitOrder.tokensOwed1,
+            msg.sender
+        );
 
+        delete limitOrders[_tokenId];
         emit LimitOrderCancelled(msg.sender, _tokenId, _amount0, _amount1);
     }
 
-    function collect(uint256 _tokenId) external {
+    function burn(uint256 _tokenId) external {
 
         isAuthorizedForToken(_tokenId);
-        _collect(_tokenId, msg.sender);
+        // remove information related to tokenId
+        require(limitOrders[_tokenId].processed > 0);
+
+        delete limitOrders[_tokenId];
+        _burn(_tokenId);
     }
 
     function addFunding(uint256 _amount) external {
@@ -303,23 +333,9 @@ contract LimitOrderManager is
         emit FundingAdded(msg.sender, _amount);
     }
 
-    function setTargetGasPrice(uint256 _targetGasPrice) external {
-
-        require(_targetGasPrice > 0);
-
-        targetGasPrice[msg.sender] = _targetGasPrice;
-        emit TargetGasPriceSet(msg.sender, _targetGasPrice);
-    }
-
     function withdrawFunding(uint256 _amount) external {
 
         uint256 balance = funding[msg.sender];
-        (uint256 reservedServiceFee,) = estimateServiceFee(
-            targetGasPrice[msg.sender],
-            activeOrders[msg.sender],
-            msg.sender
-        );
-        require(balance >= reservedServiceFee);
 
         balance = balance.sub(_amount);
         funding[msg.sender] = balance;
@@ -373,18 +389,18 @@ contract LimitOrderManager is
         );
     }
 
-    function canProcess(uint256 _tokenId, uint256 _gasPrice) external view override
+    function canProcess(uint256 _tokenId, uint256 _gasPrice) external override
     returns (bool underfunded, uint256 _serviceFee, uint256 _monitorFee) {
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
 
         address _owner = ownerOf(_tokenId);
-        (underfunded, , _serviceFee, _monitorFee) = isUnderfunded(_owner);
-        if (underfunded || targetGasPrice[_owner] < _gasPrice) {
+        (underfunded, , _serviceFee, _monitorFee) = isUnderfunded(_owner, _gasPrice);
+        if (underfunded) {
             underfunded = false;
         } else {
             (uint256 amount0, uint256 amount1) =
-                UniswapUtils._amountsForLiquidity(
+                utils._amountsForLiquidity(
                     limitOrder.pool,
                     limitOrder.tickLower,
                     limitOrder.tickUpper,
@@ -406,10 +422,9 @@ contract LimitOrderManager is
     
     }
 
-    function isUnderfunded(address _owner) public view returns (
+    function isUnderfunded(address _owner, uint256 _targetGasPrice) public returns (
         bool underfunded, uint256 amount, uint256 _serviceFee, uint256 _monitorFee
     ) {
-        uint256 _targetGasPrice = targetGasPrice[_owner];
         if (_targetGasPrice > 0) {
             (_serviceFee,_monitorFee)= estimateServiceFee(
                 _targetGasPrice, 1, _owner
@@ -458,20 +473,22 @@ contract LimitOrderManager is
         return monitors.length;
     }
 
-    function quoteKROM(uint256 _weiAmount) public view override returns (uint256 quote) {
+    function quoteKROM(uint256 _weiAmount) public override returns (uint256 quote) {
 
-        return UniswapUtils.quoteKROM(
+        return utils.quoteKROM(
             factory,
+            quoter,
             address(WETH),
             address(KROM),
             _weiAmount
         );
     }
 
-    function serviceFee(address _owner) public view returns (uint256 _serviceFee) {
+    function serviceFee(address _owner, uint256 _targetGasPrice)
+        public returns (uint256 _serviceFee) {
 
         (_serviceFee,) = estimateServiceFee(
-            targetGasPrice[_owner],
+            _targetGasPrice,
             activeOrders[_owner],
             _owner
         );
@@ -480,7 +497,7 @@ contract LimitOrderManager is
     function estimateServiceFee(
         uint256 _targetGasPrice,
         uint256 _noOrders,
-        address _owner) public view virtual
+        address) public virtual
     returns (uint256 _serviceFee, uint256 _monitorFee) {
 
         _monitorFee = quoteKROM(
@@ -488,62 +505,36 @@ contract LimitOrderManager is
         );
 
         _serviceFee = _monitorFee
-        .mul(PROTOCOL_FEE_MULTIPLIER.add(protocolFee))
-        .div(PROTOCOL_FEE_MULTIPLIER);
+            .mul(PROTOCOL_FEE_MULTIPLIER.add(protocolFee))
+            .div(PROTOCOL_FEE_MULTIPLIER);
     }
 
-    function _collect(uint256 _tokenId, address _owner) internal returns
+    function _collect(
+        uint256 _tokenId,
+        IUniswapV3Pool _pool,
+        int24 _tickLower,
+        int24 _tickUpper,
+        uint128 _tokensOwed0,
+        uint128 _tokensOwed1,
+        address _owner
+    ) internal returns
         (uint256 _tokensToSend0, uint256 _tokensToSend1) {
 
-        LimitOrder storage limitOrder = limitOrders[_tokenId];
-        require(limitOrder.processed > 0);
-
         (_tokensToSend0, _tokensToSend1) =
-            limitOrder.pool.collect(
+            _pool.collect(
                 address(this),
-                limitOrder.tickLower,
-                limitOrder.tickUpper,
-                _toUint128(limitOrder.tokensOwed0),
-                _toUint128(limitOrder.tokensOwed1)
+                 _tickLower,
+                _tickUpper,
+                _tokensOwed0,
+                _tokensOwed1
             );
 
         require(_tokensToSend0 > 0 || _tokensToSend1 > 0);
 
-        // refund
-        uint256 payment = limitOrder.monitor.batchPayment(
-            limitOrder.batchId
-        );
+        _transferTokenTo(_pool.token0(), _tokensToSend0, _owner);
+        _transferTokenTo(_pool.token1(), _tokensToSend1, _owner);
 
-        if (limitOrder.monitorFeePaid > payment) {
-
-            uint256 balance = funding[_owner];
-            uint256 monitorBalance =  KROM.balanceOf(address(limitOrder.monitor));
-            uint256 _amountToTopUp = limitOrder.monitorFeePaid.sub(payment);
-
-            _amountToTopUp = _amountToTopUp > monitorBalance
-                ? monitorBalance
-                : _amountToTopUp;
-
-            balance = balance.add(_amountToTopUp);
-            funding[_owner] = balance;
-
-            // top-up from the monitor
-            TransferHelper.safeTransferFrom(
-                address(KROM),
-                address(limitOrder.monitor),
-                address(this),
-                _amountToTopUp
-            );
-        }
-
-        _transferTokenTo(limitOrder.pool.token0(), _tokensToSend0, _owner);
-        _transferTokenTo(limitOrder.pool.token1(), _tokensToSend1, _owner);
-
-        // remove information related to tokenId
-        delete limitOrders[_tokenId];
-        _burn(_tokenId);
-
-        emit LimitOrderCollected(_owner, _tokenId, _tokensToSend0, _tokensToSend1, payment);
+        emit LimitOrderCollected(_owner, _tokenId, _tokensToSend0, _tokensToSend1);
     }
 
     function _selectMonitor() internal returns (IOrderMonitor _monitor) {
@@ -585,8 +576,8 @@ contract LimitOrderManager is
         if (_amount > 0) {
             if (_token == address(WETH)) {
                 // if token is WETH, withdraw and send back ETH
-                WETH.transfer(address(WETHExt), _amount);
-                WETHExt.withdraw(_amount, _to, WETH);
+                WETH.transfer(address(utils), _amount);
+                utils.withdraw(_amount, _to, WETH);
             } else {
                 TransferHelper.safeTransfer(_token, _to, _amount);
             }
@@ -594,24 +585,22 @@ contract LimitOrderManager is
     }
 
 
-    function _updateLimitOrder(LimitOrder storage limitOrder)
+    function _removeLiquidity(LimitOrder storage limitOrder)
     internal
     returns (
-        uint256 amount0,
-        uint256 amount1
+        uint128 tokensOwed0,
+        uint128 tokensOwed1
     ) {
 
-        limitOrder.processed = _blockNumber();
-
         if (limitOrder.liquidity > 0) {
-            (amount0, amount1) = limitOrder.pool.burn(
+            (uint256 amount0, uint256 amount1) = limitOrder.pool.burn(
                 limitOrder.tickLower, limitOrder.tickUpper, limitOrder.liquidity
             );
 
             bytes32 positionKey = PositionKey.compute(address(this), limitOrder.tickLower, limitOrder.tickUpper);
             (, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, , ) = limitOrder.pool.positions(positionKey);
 
-            amount0 = amount0.add(
+            tokensOwed0 = uint128(amount0) + uint128(
                 FullMath.mulDiv(
                     feeGrowthInside0LastX128 - limitOrder.feeGrowthInside0LastX128,
                     limitOrder.liquidity,
@@ -619,20 +608,14 @@ contract LimitOrderManager is
                 )
             );
 
-            amount1 = amount1.add(
+            tokensOwed1 = uint128(amount1) + uint128(
                 FullMath.mulDiv(
                     feeGrowthInside1LastX128 - limitOrder.feeGrowthInside1LastX128,
                     limitOrder.liquidity,
                     FixedPoint128.Q128
                 )
             );
-            limitOrder.liquidity = 0;
         }
-
-        // no liquidity for this position anymore
-        limitOrder.tokensOwed0 = amount0;
-        limitOrder.tokensOwed1 = amount1;
-
     }
 
     function _blockNumber() internal view returns (uint256) {
