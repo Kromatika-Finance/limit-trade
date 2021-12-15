@@ -74,14 +74,8 @@ contract LimitOrderManager is
     /// @dev fired when funding is withdrawn
     event FundingWithdrawn(address indexed from, uint256 amount);
 
-    /// @dev target gas price
-    event TargetGasPriceSet(address indexed from, uint256 gasPrice);
-
     /// @dev funding
     mapping(address => uint256) public override funding;
-
-    /// @dev gas price
-    mapping(address => uint256) public targetGasPrice;
 
     /// @dev active orders
     mapping(address => uint256) public activeOrders;
@@ -339,23 +333,9 @@ contract LimitOrderManager is
         emit FundingAdded(msg.sender, _amount);
     }
 
-    function setTargetGasPrice(uint256 _targetGasPrice) external {
-
-        require(_targetGasPrice > 0);
-
-        targetGasPrice[msg.sender] = _targetGasPrice;
-        emit TargetGasPriceSet(msg.sender, _targetGasPrice);
-    }
-
     function withdrawFunding(uint256 _amount) external {
 
         uint256 balance = funding[msg.sender];
-        (uint256 reservedServiceFee,) = estimateServiceFee(
-            targetGasPrice[msg.sender],
-            activeOrders[msg.sender],
-            msg.sender
-        );
-        require(balance >= reservedServiceFee);
 
         balance = balance.sub(_amount);
         funding[msg.sender] = balance;
@@ -415,8 +395,8 @@ contract LimitOrderManager is
         LimitOrder storage limitOrder = limitOrders[_tokenId];
 
         address _owner = ownerOf(_tokenId);
-        (underfunded, , _serviceFee, _monitorFee) = isUnderfunded(_owner);
-        if (underfunded || targetGasPrice[_owner] < _gasPrice) {
+        (underfunded, , _serviceFee, _monitorFee) = isUnderfunded(_owner, _gasPrice);
+        if (underfunded) {
             underfunded = false;
         } else {
             (uint256 amount0, uint256 amount1) =
@@ -442,10 +422,9 @@ contract LimitOrderManager is
     
     }
 
-    function isUnderfunded(address _owner) public returns (
+    function isUnderfunded(address _owner, uint256 _targetGasPrice) public returns (
         bool underfunded, uint256 amount, uint256 _serviceFee, uint256 _monitorFee
     ) {
-        uint256 _targetGasPrice = targetGasPrice[_owner];
         if (_targetGasPrice > 0) {
             (_serviceFee,_monitorFee)= estimateServiceFee(
                 _targetGasPrice, 1, _owner
@@ -505,10 +484,11 @@ contract LimitOrderManager is
         );
     }
 
-    function serviceFee(address _owner) public returns (uint256 _serviceFee) {
+    function serviceFee(address _owner, uint256 _targetGasPrice)
+        public returns (uint256 _serviceFee) {
 
         (_serviceFee,) = estimateServiceFee(
-            targetGasPrice[_owner],
+            _targetGasPrice,
             activeOrders[_owner],
             _owner
         );
@@ -525,8 +505,8 @@ contract LimitOrderManager is
         );
 
         _serviceFee = _monitorFee
-        .mul(PROTOCOL_FEE_MULTIPLIER.add(protocolFee))
-        .div(PROTOCOL_FEE_MULTIPLIER);
+            .mul(PROTOCOL_FEE_MULTIPLIER.add(protocolFee))
+            .div(PROTOCOL_FEE_MULTIPLIER);
     }
 
     function _collect(
