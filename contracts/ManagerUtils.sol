@@ -27,12 +27,6 @@ contract ManagerUtils {
 
     uint24 public constant POOL_FEE = 3000;
 
-    function withdraw(uint wad, address _beneficiary, IWETH9 WETH) public {
-
-        WETH.withdraw(wad);
-        TransferHelper.safeTransferETH(_beneficiary, wad);
-    }
-
     function calculateLimitTicks(
         IUniswapV3Pool _pool,
         uint160 _sqrtPriceX96,
