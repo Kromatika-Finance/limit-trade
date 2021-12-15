@@ -27,7 +27,7 @@ module.exports = async function (deployer, network, accounts) {
   await deployProxy(LimitOrderManager,
       [uniswapFactory, uniswapQuoter, wrappedETHAddress, WETHExtendedInstance.address,
           managerUtilsInstance.address, kromatikaInstance.address, accessTokenInstance.address,
-        feeAddress, 600000, 10000, 50000],
+        feeAddress, 1200000000, 10000, 50000],
       {deployer, unsafeAllow: ['delegatecall']});
 
   await accessTokenInstance.mint(accounts[0]);
