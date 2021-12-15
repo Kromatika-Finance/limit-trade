@@ -121,6 +121,7 @@ contract LimitOrderManager is
 
     /// @notice Initializes the smart contract instead of a constructorr
     /// @param  _factory univ3 factory
+    /// @param  _quoter univ3 quoter
     /// @param  _WETH wrapped ETH
     /// @param  _utils limit manager utils
     /// @param  _KROM kromatika token
@@ -244,7 +245,14 @@ contract LimitOrderManager is
         require(limitOrder.processed == 0);
 
         // remove liqudiity
-        (_amount0, _amount1) = _removeLiquidity(limitOrder);
+        (_amount0, _amount1) = _removeLiquidity(
+            limitOrder.pool,
+            limitOrder.tickLower,
+            limitOrder.tickUpper,
+            limitOrder.liquidity,
+            limitOrder.feeGrowthInside0LastX128,
+            limitOrder.feeGrowthInside1LastX128
+        );
 
         limitOrder.processed = _blockNumber();
         limitOrder.tokensOwed0 = _amount0;
@@ -292,7 +300,14 @@ contract LimitOrderManager is
         LimitOrder storage limitOrder = limitOrders[_tokenId];
         require(limitOrder.processed == 0);
 
-        (_amount0, _amount1) = _removeLiquidity(limitOrder);
+        (_amount0, _amount1) = _removeLiquidity(
+            limitOrder.pool,
+            limitOrder.tickLower,
+            limitOrder.tickUpper,
+            limitOrder.liquidity,
+            limitOrder.feeGrowthInside0LastX128,
+            limitOrder.feeGrowthInside1LastX128
+        );
 
         activeOrders[msg.sender] = activeOrders[msg.sender].sub(1);
 
@@ -585,33 +600,40 @@ contract LimitOrderManager is
     }
 
 
-    function _removeLiquidity(LimitOrder storage limitOrder)
+    function _removeLiquidity(
+        IUniswapV3Pool _pool,
+        int24 _tickLower,
+        int24 _tickUpper,
+        uint128 _liquidity,
+        uint256 _feeGrowthInside0LastX128,
+        uint256 _feeGrowthInside1LastX128
+    )
     internal
     returns (
         uint128 tokensOwed0,
         uint128 tokensOwed1
     ) {
 
-        if (limitOrder.liquidity > 0) {
-            (uint256 amount0, uint256 amount1) = limitOrder.pool.burn(
-                limitOrder.tickLower, limitOrder.tickUpper, limitOrder.liquidity
+        if (_liquidity > 0) {
+            (uint256 amount0, uint256 amount1) = _pool.burn(
+                _tickLower, _tickUpper, _liquidity
             );
 
-            bytes32 positionKey = PositionKey.compute(address(this), limitOrder.tickLower, limitOrder.tickUpper);
-            (, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, , ) = limitOrder.pool.positions(positionKey);
+            bytes32 positionKey = PositionKey.compute(address(this), _tickLower, _tickUpper);
+            (, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, , ) = _pool.positions(positionKey);
 
             tokensOwed0 = uint128(amount0) + uint128(
                 FullMath.mulDiv(
-                    feeGrowthInside0LastX128 - limitOrder.feeGrowthInside0LastX128,
-                    limitOrder.liquidity,
+                    feeGrowthInside0LastX128 - _feeGrowthInside0LastX128,
+                    _liquidity,
                     FixedPoint128.Q128
                 )
             );
 
             tokensOwed1 = uint128(amount1) + uint128(
                 FullMath.mulDiv(
-                    feeGrowthInside1LastX128 - limitOrder.feeGrowthInside1LastX128,
-                    limitOrder.liquidity,
+                    feeGrowthInside1LastX128 - _feeGrowthInside1LastX128,
+                    _liquidity,
                     FixedPoint128.Q128
                 )
             );
