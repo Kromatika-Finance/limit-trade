@@ -7,7 +7,7 @@ import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 
 import "./LimitOrderMonitor.sol";
-import "./ManagerUtils.sol";
+import "./WETHExtended.sol";
 
 /// @title  LimitOrderMonitorETH
 contract LimitOrderMonitorETH is LimitOrderMonitor {
@@ -21,7 +21,7 @@ contract LimitOrderMonitorETH is LimitOrderMonitor {
     IWETH9 public WETH;
 
     /// @dev simple WETH adapter
-    ManagerUtils public WETHExt;
+    WETHExtended public WETHExt;
 
     function initialize(IOrderManager _orderManager,
         IUniswapV3Factory _factory,
@@ -32,7 +32,7 @@ contract LimitOrderMonitorETH is LimitOrderMonitor {
         uint256 _upkeepInterval,
         ISwapRouter _swapRouter,
         IWETH9 _WETH,
-        ManagerUtils _WETHExt
+        WETHExtended _WETHExt
     ) public initializer {
 
         super.initialize(

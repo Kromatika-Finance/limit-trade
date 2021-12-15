@@ -35,6 +35,7 @@ contract OpLimitOrderManager is LimitOrderManager {
         IUniswapV3Factory _factory,
         IQuoter _quoter,
         IWETH9 _WETH,
+        WETHExtended _WETHExtended,
         ManagerUtils _utils,
         IERC20 _KROM,
         IERC721 _OPAccessToken,
@@ -49,7 +50,7 @@ contract OpLimitOrderManager is LimitOrderManager {
         protocolFeeDiscount = _protocolFeeDiscount;
 
         super.initialize(
-            _factory, _quoter, _WETH, _utils, _KROM,
+            _factory, _quoter, _WETH, _WETHExtended, _utils, _KROM,
             _feeAddress, _gasUsageMonitor, _protocolFee
         );
     }
