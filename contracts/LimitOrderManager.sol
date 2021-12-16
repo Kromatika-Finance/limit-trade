@@ -22,6 +22,7 @@ import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
 import "./Multicall.sol";
 import "./ManagerUtils.sol";
+import "./WETHExtended.sol";
 
 /// @title  LimitOrderManager
 contract LimitOrderManager is
@@ -92,6 +93,9 @@ contract LimitOrderManager is
     /// @dev wrapper ETH
     IWETH9 public WETH;
 
+    /// @dev wrapper extended
+    WETHExtended public WETHExt;
+
     /// @dev utils
     ManagerUtils public utils;
 
@@ -132,6 +136,7 @@ contract LimitOrderManager is
             IUniswapV3Factory _factory,
             IQuoter _quoter,
             IWETH9 _WETH,
+            WETHExtended _WETHExtended,
             ManagerUtils _utils,
             IERC20 _KROM,
             address _feeAddress,
@@ -144,6 +149,7 @@ contract LimitOrderManager is
         WETH = _WETH;
         KROM = _KROM;
         quoter = _quoter;
+        WETHExt = _WETHExtended;
 
         gasUsageMonitor = _gasUsageMonitor;
         protocolFee = _protocolFee;
@@ -591,8 +597,8 @@ contract LimitOrderManager is
         if (_amount > 0) {
             if (_token == address(WETH)) {
                 // if token is WETH, withdraw and send back ETH
-                WETH.transfer(address(utils), _amount);
-                utils.withdraw(_amount, _to, WETH);
+                WETH.transfer(address(WETHExt), _amount);
+                WETHExt.withdraw(_amount, _to, WETH);
             } else {
                 TransferHelper.safeTransfer(_token, _to, _amount);
             }

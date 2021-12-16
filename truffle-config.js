@@ -24,7 +24,7 @@ require('dotenv').config()
 console.log(process.env.RPC_URL)
 console.log(process.env.MNEMONIC)
 
-const gasPrice = process.env.GAS_PRICE ? process.env.GAS_PRICE : 30000000000; // 30gwei
+const gasPrice = process.env.GAS_PRICE ? process.env.GAS_PRICE : 3000000000; // 3gwei
 const gasLimit = process.env.GAS_LIMIT ? process.env.GAS_LIMIT : 200000000;   //
 
 //
@@ -50,7 +50,7 @@ module.exports = {
         // options below to some value.
         //
         development: {
-            host: '127.0.0.1', // Localhost (default: none)
+            provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
             port: 8545, // Standard Ethereum port (default: none)
             network_id: '*', // Any network (default: none)
             skipDryRun: true,
@@ -85,15 +85,12 @@ module.exports = {
             provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
             network_id: 10,
             skipDryRun: false,
-            websockets: true,
             networkCheckTimeout: 5000000
         },
         "optimism-kovan":{
             provider: () => new HDWalletProvider(process.env.MNEMONIC, process.env.RPC_URL),
             network_id: 69,
-            skipDryRun: false,
-            websockets: true,
-            networkCheckTimeout: 5000000
+            skipDryRun: false
         },
         "arbitrum":{
             provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
