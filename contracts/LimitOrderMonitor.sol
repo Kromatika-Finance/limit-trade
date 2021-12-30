@@ -27,7 +27,7 @@ contract LimitOrderMonitor is
     uint256 private constant MAX_BATCH_SIZE = 100;
     uint256 private constant MAX_MONITOR_SIZE = 10000;
 
-    event BatchProcessed(uint256 batchId, uint256 batchSize, uint256 gasUsed,
+    event BatchProcessed(uint256 batchSize, uint256 gasUsed,
         uint256 paymentPaid, bytes data);
 
     /// @dev tokenIds index per token id
@@ -63,15 +63,6 @@ contract LimitOrderMonitor is
     /// @dev interval between 2 upkeeps, in blocks
     uint256 public upkeepInterval;
 
-    /// @dev batch count
-    uint256 public batchCount;
-
-    /// @dev only trade manager
-    modifier onlyTradeManager() {
-        require(msg.sender == address(orderManager), "NOT_TRADE_MANAGER");
-        _;
-    }
-
     function initialize (IOrderManager _orderManager,
         IUniswapV3Factory _factory,
         IERC20 _KROM,
@@ -98,14 +89,17 @@ contract LimitOrderMonitor is
         KROM.approve(address(orderManager), MAX_INT);
     }
     
-    function startMonitor(uint256 _tokenId) external override onlyTradeManager {
+    function startMonitor(uint256 _tokenId) external override {
 
+        isAuthorizedTradeManager(); 
         require(tokenIds.length < monitorSize, "MONITOR_FULL");
         tokenIds.push(_tokenId);
         tokenIndexPerTokenId[_tokenId] = tokenIds.length;
     }
 
-    function stopMonitor(uint256 _tokenId) external override onlyTradeManager {
+    function stopMonitor(uint256 _tokenId) external override {
+        
+        isAuthorizedTradeManager();
         _stopMonitor(_tokenId);
     }
 
@@ -153,8 +147,6 @@ contract LimitOrderMonitor is
         isAuthorizedKeeper();
         uint256 _gasUsed = gasleft();
 
-        batchCount++;
-
         (uint256[] memory _tokenIds, uint256 _count) = abi.decode(
             performData, (uint256[], uint256)
         );
@@ -174,7 +166,7 @@ contract LimitOrderMonitor is
                     validCount++;
                     _stopMonitor(_tokenId);
                     orderManager.processLimitOrder(
-                        _tokenId, batchCount, _serviceFee, _monitorFee
+                        _tokenId, _serviceFee, _monitorFee
                     );
                     paymentPaid = paymentPaid.add(_monitorFee);
                 }
@@ -184,13 +176,12 @@ contract LimitOrderMonitor is
         require(validCount > 0);
 
         _gasUsed = _gasUsed - gasleft();
-        lastUpkeep = block.number;
+        lastUpkeep = _getBlockNumber();
 
         // send the paymentPaid to the sender
         _transferFees(paymentPaid, msg.sender);
 
         emit BatchProcessed(
-            batchCount,
             validCount,
             _gasUsed,
             paymentPaid,
@@ -223,11 +214,13 @@ contract LimitOrderMonitor is
     }
 
     function changeController(address _controller) external {
+        
         isAuthorizedController();
         controller = _controller;
     }
 
     function changeKeeper(address _keeper) external {
+
         isAuthorizedController();
         keeper = _keeper;
     }
@@ -271,6 +264,10 @@ contract LimitOrderMonitor is
 
     function isAuthorizedKeeper() internal view {
         require(msg.sender == keeper);
+    }
+
+    function isAuthorizedTradeManager() internal view {
+        require(msg.sender == address(orderManager));
     }
 
     /// @notice Removes index element from the given array.

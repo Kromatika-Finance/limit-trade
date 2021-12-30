@@ -17,7 +17,7 @@ interface IOrderManager {
     function placeLimitOrder(LimitOrderParams calldata params) external payable returns (uint256 tokenId);
 
     function processLimitOrder(
-        uint256 _tokenId, uint256 _batchId, uint256 _serviceFee, uint256 _monitorFee
+        uint256 _tokenId, uint256 _serviceFee, uint256 _monitorFee
     ) external returns (uint128, uint128);
 
     function canProcess(uint256 _tokenId, uint256 gasPrice) external returns (bool, uint256, uint256);
