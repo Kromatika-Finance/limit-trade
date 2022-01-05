@@ -76,6 +76,18 @@ contract LimitOrderManager is
     /// @dev fired when funding is withdrawn
     event FundingWithdrawn(address indexed from, uint256 amount);
 
+    /// @dev when gas usage was changed
+    event GasUsageMonitorChanged(address from, uint256 newValue);
+
+    /// @dev when protocol fee was changed
+    event ProtocolFeeChanged(address from, uint32 newValue);
+
+    /// @dev when protocol address was changed
+    event ProtocolAddressChanged(address from, address newValue);
+
+    /// @dev when controller was changed
+    event ControllerChanged(address from, address newValue);
+
     /// @dev funding
     mapping(address => uint256) public override funding;
 
@@ -154,6 +166,10 @@ contract LimitOrderManager is
         controller = msg.sender;
 
         ERC721Upgradeable.__ERC721_init("Kromatika Position", "KROM-POS");
+
+        emit GasUsageMonitorChanged(msg.sender, _gasUsageMonitor);
+        emit ProtocolFeeChanged(msg.sender, _protocolFee);
+        emit ProtocolAddressChanged(msg.sender, _feeAddress);
     }
 
     function placeLimitOrder(LimitOrderParams calldata params)
@@ -474,16 +490,19 @@ contract LimitOrderManager is
         isAuthorizedController();
         require(_protocolFee <= PROTOCOL_FEE_MULTIPLIER, "INVALID_FEE");
         protocolFee = _protocolFee;
+        emit ProtocolFeeChanged(msg.sender, _protocolFee);
     }
 
     function setGasUsageMonitor(uint256 _gasUsageMonitor) external {
         isAuthorizedController();
         gasUsageMonitor = _gasUsageMonitor;
+        emit GasUsageMonitorChanged(msg.sender, _gasUsageMonitor);
     }
 
     function changeController(address _controller) external {
         isAuthorizedController();
         controller = _controller;
+        emit ControllerChanged(msg.sender, _controller);
     }
 
     function monitorsLength() external view returns (uint256) {

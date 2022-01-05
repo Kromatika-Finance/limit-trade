@@ -27,6 +27,9 @@ contract LimitOrderMonitorChainlink is LimitOrderMonitor {
     /// @dev monitor keeperID
     uint256 public keeperId;
 
+    /// @dev when keeper id has changed
+    event KeeperIdChanged(address from, uint256 newValue);
+
     function initialize(IOrderManager _orderManager,
         IUniswapV3Factory _factory,
         IERC20 _KROM,
@@ -52,6 +55,7 @@ contract LimitOrderMonitorChainlink is LimitOrderMonitor {
 
         isAuthorizedController();
         keeperId = _keeperId;
+        emit KeeperIdChanged(msg.sender, _keeperId);
     }
 
     function _transferFees(uint256 _amount, address _owner) internal virtual override  {

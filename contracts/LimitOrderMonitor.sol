@@ -30,6 +30,27 @@ contract LimitOrderMonitor is
     event BatchProcessed(uint256 batchSize, uint256 gasUsed,
         uint256 paymentPaid, bytes data);
 
+    /// @dev when batch size have changed
+    event BatchSizeChanged(address from, uint256 newValue);
+
+    /// @dev when monitor size have changed
+    event MonitorSizeChanged(address from, uint256 newValue);
+
+    /// @dev when upkeep interval changed
+    event UpkeepIntervalChanged(address from, uint256 newValue);
+
+    /// @dev when controller has changed
+    event ControllerChanged(address from, address newValue);
+
+    /// @dev when keeper has changed
+    event KeeperChanged(address from, address newValue);
+
+    /// @dev when monitor is started
+    event MonitorStarted(uint256 tokenId);
+
+    /// @dev when monitor is stopped
+    event MonitorStopped(uint256 tokenId);
+
     /// @dev tokenIds index per token id
     mapping (uint256 => uint256) public tokenIndexPerTokenId;
 
@@ -95,12 +116,15 @@ contract LimitOrderMonitor is
         require(tokenIds.length < monitorSize, "MONITOR_FULL");
         tokenIds.push(_tokenId);
         tokenIndexPerTokenId[_tokenId] = tokenIds.length;
+
+        emit MonitorStarted(_tokenId);
     }
 
     function stopMonitor(uint256 _tokenId) external override {
         
         isAuthorizedTradeManager();
         _stopMonitor(_tokenId);
+        emit MonitorStopped(_tokenId);
     }
 
     function checkUpkeep(
@@ -199,6 +223,7 @@ contract LimitOrderMonitor is
         require(_batchSize <= monitorSize, "SIZE_MISMATCH");
 
         batchSize = _batchSize;
+        emit BatchSizeChanged(msg.sender, _batchSize);
     }
 
     function setMonitorSize(uint256 _monitorSize) external {
@@ -208,24 +233,28 @@ contract LimitOrderMonitor is
         require(_monitorSize >= batchSize, "SIZE_MISMATCH");
 
         monitorSize = _monitorSize;
+        emit MonitorSizeChanged(msg.sender, _monitorSize);
     }
 
     function setUpkeepInterval(uint256 _upkeepInterval) external  {
 
         isAuthorizedController();
         upkeepInterval = _upkeepInterval;
+        emit UpkeepIntervalChanged(msg.sender, _upkeepInterval);
     }
 
     function changeController(address _controller) external {
         
         isAuthorizedController();
         controller = _controller;
+        emit ControllerChanged(msg.sender, _controller);
     }
 
     function changeKeeper(address _keeper) external {
 
         isAuthorizedController();
         keeper = _keeper;
+        emit KeeperChanged(msg.sender, _keeper);
     }
 
     function _stopMonitor(uint256 _tokenId) internal {
