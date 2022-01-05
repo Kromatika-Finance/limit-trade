@@ -86,7 +86,7 @@ contract LimitOrderMonitor is
         controller = msg.sender;
         keeper = _keeper;
 
-        KROM.approve(address(orderManager), MAX_INT);
+        require(KROM.approve(address(orderManager), MAX_INT));
     }
     
     function startMonitor(uint256 _tokenId) external override {

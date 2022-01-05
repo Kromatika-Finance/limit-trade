@@ -587,7 +587,7 @@ contract LimitOrderManager is
             if (_token == address(WETH)) {
                 // if _token is WETH --> wrap it first
                 WETH.deposit{value: _amount}();
-                WETH.transfer(_recipient, _amount);
+                require(WETH.transfer(_recipient, _amount));
             } else {
                 TransferHelper.safeTransferFrom(_token, _owner, _recipient, _amount);
             }
@@ -598,7 +598,7 @@ contract LimitOrderManager is
         if (_amount > 0) {
             if (_token == address(WETH)) {
                 // if token is WETH, withdraw and send back ETH
-                WETH.transfer(address(WETHExt), _amount);
+                require(WETH.transfer(address(WETHExt), _amount));
                 WETHExt.withdraw(_amount, _to, WETH);
             } else {
                 TransferHelper.safeTransfer(_token, _to, _amount);
