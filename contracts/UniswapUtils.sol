@@ -11,14 +11,16 @@ import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 
-import "./interfaces/IManagerUtils.sol";
+import "./interfaces/IUniswapUtils.sol";
 
 // use library ?
-contract ManagerUtils is IManagerUtils {
+contract UniswapUtils is IUniswapUtils {
 
     using SafeMath for uint256;
 
     uint24 public constant POOL_FEE = 3000;
+
+    uint32 public constant TWAP_PERIOD = 60;
 
     function calculateLimitTicks(
         IUniswapV3Pool _pool,
@@ -54,13 +56,13 @@ contract ManagerUtils is IManagerUtils {
     }
 
     function quoteKROM(IUniswapV3Factory factory, address WETH, address KROM, uint256 _weiAmount)
-    external override returns (uint256 quote) {
+    external override view returns (uint256 quote) {
 
         address _poolAddress = factory.getPool(WETH, KROM, POOL_FEE);
         require(_poolAddress != address(0));
 
         if (_weiAmount > 0) {
-            (int24 arithmeticMeanTick,) = OracleLibrary.consult(_poolAddress, 60);
+            (int24 arithmeticMeanTick,) = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
             quote = OracleLibrary.getQuoteAtTick(
                 arithmeticMeanTick,
                 _toUint128(_weiAmount),

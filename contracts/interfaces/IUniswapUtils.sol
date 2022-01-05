@@ -10,7 +10,7 @@ import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 
-interface IManagerUtils {
+interface IUniswapUtils {
 
     function calculateLimitTicks(
         IUniswapV3Pool _pool,

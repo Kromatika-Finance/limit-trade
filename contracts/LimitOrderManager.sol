@@ -20,7 +20,7 @@ import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
 
 import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
-import "./interfaces/IManagerUtils.sol";
+import "./interfaces/IUniswapUtils.sol";
 
 import "./SelfPermit.sol";
 import "./Multicall.sol";
@@ -98,7 +98,7 @@ contract LimitOrderManager is
     WETHExtended public WETHExt;
 
     /// @dev utils
-    IManagerUtils public utils;
+    IUniswapUtils public utils;
 
     /// @dev univ3 factory
     IUniswapV3Factory public factory;
@@ -133,7 +133,7 @@ contract LimitOrderManager is
             IUniswapV3Factory _factory,
             IWETH9 _WETH,
             WETHExtended _WETHExtended,
-            IManagerUtils _utils,
+            IUniswapUtils _utils,
             IERC20 _KROM,
             address _feeAddress,
             uint256 _gasUsageMonitor,
@@ -234,8 +234,8 @@ contract LimitOrderManager is
 
     function processLimitOrder(
         uint256 _tokenId,
-        uint256 _serviceFeePaid, 
-        uint256 _monitorFeePaid
+        uint256 _serviceFeePaid,
+        uint256
     ) external override
         returns (uint128 _amount0, uint128 _amount1) {
 
