@@ -183,6 +183,8 @@ contract LimitOrderMonitor is
             uint256 _serviceFee;
             uint256 _monitorFee;
             uint256 _tokenId;
+
+            require(_count <= _tokenIds.length);
             for (uint256 i = 0; i < _count; i++) {
                 _tokenId = _tokenIds[i];
                 (validTrade, _serviceFee, _monitorFee) = orderManager.canProcess(_tokenId, tx.gasprice);
