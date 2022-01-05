@@ -2,26 +2,19 @@
 
 pragma solidity >=0.7.5;
 
-import "@uniswap/v3-periphery/contracts/interfaces/external/IWETH9.sol";
-
 import "@openzeppelin/contracts/math/SafeMath.sol";
 
-import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
-import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
 import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
-import "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3MintCallback.sol";
-import "@uniswap/v3-periphery/contracts/libraries/PositionKey.sol";
-import "@uniswap/v3-periphery/contracts/libraries/CallbackValidation.sol";
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
-import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
-import "./interfaces/IOrderManager.sol";
+
+import "./interfaces/IManagerUtils.sol";
 
 // use library ?
-contract ManagerUtils {
+contract ManagerUtils is IManagerUtils {
 
     using SafeMath for uint256;
 
@@ -32,7 +25,7 @@ contract ManagerUtils {
         uint160 _sqrtPriceX96,
         uint256 _amount0,
         uint256 _amount1
-    ) external view
+    ) external override view
     returns (
         int24 _lowerTick,
         int24 _upperTick,
@@ -60,15 +53,20 @@ contract ManagerUtils {
 
     }
 
-    function quoteKROM(IUniswapV3Factory factory, IQuoter quoter, address WETH, address KROM, uint256 _weiAmount)
-    public returns (uint256 quote) {
+    function quoteKROM(IUniswapV3Factory factory, address WETH, address KROM, uint256 _weiAmount)
+    external override returns (uint256 quote) {
 
         address _poolAddress = factory.getPool(WETH, KROM, POOL_FEE);
         require(_poolAddress != address(0));
 
         if (_weiAmount > 0) {
-
-            quote = quoter.quoteExactInputSingle(WETH, KROM, POOL_FEE, _weiAmount, 0);
+            (int24 arithmeticMeanTick,) = OracleLibrary.consult(_poolAddress, 60);
+            quote = OracleLibrary.getQuoteAtTick(
+                arithmeticMeanTick,
+                _toUint128(_weiAmount),
+                WETH,
+                KROM
+            );
         }
     }
 
@@ -123,7 +121,7 @@ contract ManagerUtils {
         int24 tickLower,
         int24 tickUpper,
         uint128 liquidity
-    ) external view returns (uint256, uint256) {
+    ) external override view returns (uint256, uint256) {
         (uint160 sqrtRatioX96, , , , , , ) = pool.slot0();
         return
         LiquidityAmounts.getAmountsForLiquidity(
