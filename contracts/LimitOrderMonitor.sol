@@ -144,14 +144,14 @@ contract LimitOrderMonitor is
         bytes calldata performData
     ) external override {
 
-        isAuthorizedKeeper();
         uint256 _gasUsed = gasleft();
 
         (uint256[] memory _tokenIds, uint256 _count) = abi.decode(
             performData, (uint256[], uint256)
         );
 
-        uint256 paymentPaid;
+        uint256 serviceFeePaid;
+        uint256 monitorFeePaid;
         uint256 validCount;
 
         {
@@ -168,7 +168,8 @@ contract LimitOrderMonitor is
                     orderManager.processLimitOrder(
                         _tokenId, _serviceFee, _monitorFee
                     );
-                    paymentPaid = paymentPaid.add(_monitorFee);
+                    serviceFeePaid = serviceFeePaid.add(_serviceFee);
+                    monitorFeePaid = monitorFeePaid.add(_monitorFee);
                 }
             }
         }
@@ -178,13 +179,15 @@ contract LimitOrderMonitor is
         _gasUsed = _gasUsed - gasleft();
         lastUpkeep = _getBlockNumber();
 
-        // send the paymentPaid to the sender
-        _transferFees(paymentPaid, msg.sender);
+        // send the paymentPaid to the keeper
+        _transferFees(monitorFeePaid, keeper);
+        // send the diff to the fee address
+        _transferFees(serviceFeePaid.sub(monitorFeePaid), orderManager.feeAddress());
 
         emit BatchProcessed(
             validCount,
             _gasUsed,
-            paymentPaid,
+            serviceFeePaid,
             performData
         );
     }
@@ -260,10 +263,6 @@ contract LimitOrderMonitor is
 
     function isAuthorizedController() internal view {
         require(msg.sender == controller);
-    }
-
-    function isAuthorizedKeeper() internal view {
-        require(msg.sender == keeper);
     }
 
     function isAuthorizedTradeManager() internal view {

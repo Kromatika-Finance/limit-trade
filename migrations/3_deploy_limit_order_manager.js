@@ -21,8 +21,8 @@ module.exports = async function (deployer, network, accounts) {
 
   // 600k gas usage, 10% protocol fee
   await deployProxy(LimitOrderManager,
-      [uniswapFactory, uniswapQuoter, wrappedETHAddress, WETHExtendedInstance.address,
+      [uniswapFactory, wrappedETHAddress, WETHExtendedInstance.address,
         managerUtilsInstance.address, kromatikaInstance.address,
-        feeAddress, 400000, 10000],
+        feeAddress, 300000, 10000],
       {deployer, unsafeAllow: ['delegatecall']});
 };

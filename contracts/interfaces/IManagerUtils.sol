@@ -33,6 +33,6 @@ interface IManagerUtils {
     ) external view returns (uint256, uint256);
 
 
-    function quoteKROM(IUniswapV3Factory factory, IQuoter quoter, address WETH, address KROM, uint256 _weiAmount)
+    function quoteKROM(IUniswapV3Factory factory, address WETH, address KROM, uint256 _weiAmount)
     external returns (uint256 quote);
 }

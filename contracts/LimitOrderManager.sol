@@ -13,7 +13,6 @@ import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3MintCallback.sol";
 import '@uniswap/v3-core/contracts/libraries/FixedPoint128.sol';
 import '@uniswap/v3-core/contracts/libraries/FullMath.sol';
-import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PositionKey.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/CallbackValidation.sol";
@@ -23,6 +22,7 @@ import "./interfaces/IOrderMonitor.sol";
 import "./interfaces/IOrderManager.sol";
 import "./interfaces/IManagerUtils.sol";
 
+import "./SelfPermit.sol";
 import "./Multicall.sol";
 import "./WETHExtended.sol";
 
@@ -31,7 +31,8 @@ contract LimitOrderManager is
     IOrderManager,
     ERC721Upgradeable,
     IUniswapV3MintCallback,
-    Multicall {
+    Multicall,
+    SelfPermit {
 
     using SafeMath for uint256;
 
@@ -42,8 +43,8 @@ contract LimitOrderManager is
         uint32 monitor;
         int24 tickLower;
         int24 tickUpper;
-        bool processed;
         uint128 liquidity;
+        bool processed;
         uint256 feeGrowthInside0LastX128;
         uint256 feeGrowthInside1LastX128;
         uint128 tokensOwed0;
@@ -102,20 +103,17 @@ contract LimitOrderManager is
     /// @dev univ3 factory
     IUniswapV3Factory public factory;
 
-    /// @dev quoter
-    IQuoter public quoter;
-
     /// @dev krom token
     IERC20 public KROM;
 
     /// @dev address where the protocol fee is sent
-    address public feeAddress;
+    address public override feeAddress;
 
     /// @dev protocol fee applied on top of monitor gas usage
     uint32 public protocolFee;
 
     /// @dev estimated gas usage when monitoring L.O, including a margin as well
-    uint256 public override gasUsageMonitor;
+    uint256 public gasUsageMonitor;
 
     /// @dev The ID of the next token that will be minted. Skips 0
     uint176 private nextId;
@@ -125,7 +123,6 @@ contract LimitOrderManager is
 
     /// @notice Initializes the smart contract instead of a constructorr
     /// @param  _factory univ3 factory
-    /// @param  _quoter univ3 quoter
     /// @param  _WETH wrapped ETH
     /// @param  _utils limit manager utils
     /// @param  _KROM kromatika token
@@ -134,7 +131,6 @@ contract LimitOrderManager is
     /// @param  _protocolFee charged fee
     function initialize(
             IUniswapV3Factory _factory,
-            IQuoter _quoter,
             IWETH9 _WETH,
             WETHExtended _WETHExtended,
             IManagerUtils _utils,
@@ -148,7 +144,6 @@ contract LimitOrderManager is
         utils = _utils;
         WETH = _WETH;
         KROM = _KROM;
-        quoter = _quoter;
         WETHExt = _WETHExtended;
 
         gasUsageMonitor = _gasUsageMonitor;
@@ -258,17 +253,15 @@ contract LimitOrderManager is
             limitOrder.feeGrowthInside1LastX128
         );
 
+        limitOrder.liquidity = 0;
         limitOrder.processed = true;
         limitOrder.tokensOwed0 = _amount0;
         limitOrder.tokensOwed1 = _amount1;
-        limitOrder.liquidity = 0;
 
         address _owner = ownerOf(_tokenId);
 
         // update balance
         uint256 balance = funding[_owner];
-        // send service fee for this order to the monitor based on the target gas price set
-        uint256 _protocolFeePaid = _serviceFeePaid.sub(_monitorFeePaid);
         // reduce balance by the service fee
         balance = balance.sub(_serviceFeePaid);
         funding[_owner] = balance;
@@ -288,8 +281,7 @@ contract LimitOrderManager is
         );
 
         // send fees to monitor and protocol
-        _transferTokenTo(address(KROM), _monitorFeePaid, msg.sender);
-        _transferTokenTo(address(KROM), _protocolFeePaid, feeAddress);
+        _transferTokenTo(address(KROM), _serviceFeePaid, msg.sender);
 
         emit LimitOrderProcessed(msg.sender, _tokenId, _serviceFeePaid);
     }
@@ -502,7 +494,6 @@ contract LimitOrderManager is
 
         return utils.quoteKROM(
             factory,
-            quoter,
             address(WETH),
             address(KROM),
             _weiAmount

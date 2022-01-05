@@ -26,5 +26,5 @@ interface IOrderManager {
 
     function funding(address owner) external view returns (uint256 balance);
 
-    function gasUsageMonitor() external view returns (uint256);
+    function feeAddress() external view returns (address);
 }

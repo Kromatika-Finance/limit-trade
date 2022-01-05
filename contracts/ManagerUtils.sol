@@ -4,8 +4,8 @@ pragma solidity >=0.7.5;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
 
-import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
+import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
@@ -53,15 +53,20 @@ contract ManagerUtils is IManagerUtils {
 
     }
 
-    function quoteKROM(IUniswapV3Factory factory, IQuoter quoter, address WETH, address KROM, uint256 _weiAmount)
+    function quoteKROM(IUniswapV3Factory factory, address WETH, address KROM, uint256 _weiAmount)
     external override returns (uint256 quote) {
 
         address _poolAddress = factory.getPool(WETH, KROM, POOL_FEE);
         require(_poolAddress != address(0));
 
         if (_weiAmount > 0) {
-
-            quote = quoter.quoteExactInputSingle(WETH, KROM, POOL_FEE, _weiAmount, 0);
+            (int24 arithmeticMeanTick,) = OracleLibrary.consult(_poolAddress, 60);
+            quote = OracleLibrary.getQuoteAtTick(
+                arithmeticMeanTick,
+                _toUint128(_weiAmount),
+                WETH,
+                KROM
+            );
         }
     }
 
