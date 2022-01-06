@@ -4,7 +4,7 @@ pragma solidity >=0.7.5;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
-import '@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol';
+import './token/ERC721/ERC721Upgradeable.sol';
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
