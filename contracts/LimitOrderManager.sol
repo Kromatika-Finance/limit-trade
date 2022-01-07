@@ -334,8 +334,8 @@ contract LimitOrderManager is
             IUniswapV3Pool(limitOrder.pool),
             limitOrder.tickLower,
             limitOrder.tickUpper,
-            limitOrder.tokensOwed0,
-            limitOrder.tokensOwed1,
+            _toUint128(_amount0),
+            _toUint128(_amount1),
             msg.sender
         );
 
