@@ -29,14 +29,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Aristokrates/uniswap-limit-trade.git"
+    "url": "git+https://github.com/Kromatika-Finance/limit-trade.git"
   },
-  "author": "",
-  "license": "ISC",
+  "author": "Kromatika Finance",
+  "license": "GPL-3.0-or-later",
   "bugs": {
-    "url": "https://github.com/Aristokrates/uniswap-limit-trade/issues"
+    "url": "https://github.com/Kromatika-Finance/limit-trade/issues"
   },
-  "homepage": "https://github.com/Aristokrates/uniswap-limit-trade#readme",
+  "homepage": "https://github.com/Kromatika-Finance/limit-trade#readme",
   "dependencies": {
     "@chainlink/contracts": "^0.2.2",
     "@openzeppelin/contracts": "^3.4.2",
