@@ -54,6 +54,6 @@
     "@openzeppelin/truffle-upgrades": "^1.11.0",
     "solc-0.7": "npm:solc@^0.7.0",
     "solidity-docgen": "^0.5.14",
-    "truffle-plugin-verify": "^0.5.15"
+    "truffle-plugin-verify": "^0.5.20"
   }
 }
