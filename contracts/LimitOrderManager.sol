@@ -134,6 +134,9 @@ contract LimitOrderManager is
     /// @dev last monitor index + 1 ; always > 0
     uint32 public nextMonitor;
 
+    /// @dev native transfer
+    bool nativeTransfer;
+
     /// @notice Initializes the smart contract instead of a constructorr
     /// @param  _factory univ3 factory
     /// @param  _WETH wrapped ETH
@@ -165,6 +168,7 @@ contract LimitOrderManager is
 
         nextId = 1;
         controller = msg.sender;
+        nativeTransfer = true;
 
         ERC721Upgradeable.__ERC721_init("Kromatika Position", "KROM-POS");
 
@@ -500,6 +504,11 @@ contract LimitOrderManager is
         emit GasUsageMonitorChanged(msg.sender, _gasUsageMonitor);
     }
 
+    function setNativeTransfer(bool _nativeTransfer) external {
+        isAuthorizedController();
+        nativeTransfer = _nativeTransfer;
+    }
+
     function changeController(address _controller) external {
         isAuthorizedController();
         controller = _controller;
@@ -628,8 +637,13 @@ contract LimitOrderManager is
         if (_amount > 0) {
             if (_token == address(WETH)) {
                 // if token is WETH, withdraw and send back ETH
-                require(WETH.transfer(address(WETHExt), _amount));
-                WETHExt.withdraw(_amount, _to, WETH);
+                if (nativeTransfer) {
+                    WETH.withdraw(_amount);
+                    TransferHelper.safeTransferETH(_to, _amount);
+                } else {
+                    require(WETH.transfer(address(WETHExt), _amount));
+                    WETHExt.withdraw(_amount, _to, WETH);
+                }
             } else {
                 TransferHelper.safeTransfer(_token, _to, _amount);
             }
