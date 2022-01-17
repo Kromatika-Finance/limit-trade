@@ -12,7 +12,7 @@ module.exports = async function (deployer, network, accounts) {
 
   const kromatikaInstance = await Kromatika.deployed();
 
-  await deployProxy(UniswapUtils, [], {deployer});
+  await deployProxy(UniswapUtils, [0], {deployer});
   await deployer.deploy(WETHExtended);
 
   const managerUtilsInstance = await UniswapUtils.deployed();
