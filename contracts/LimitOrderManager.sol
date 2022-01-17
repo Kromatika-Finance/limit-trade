@@ -54,6 +54,7 @@ contract LimitOrderManager is
      struct MintCallbackData {
         PoolAddress.PoolKey poolKey;
         address payer;
+        bool native;
     }
 
     /// @dev fired when a new limitOrder is placed
@@ -192,9 +193,7 @@ contract LimitOrderManager is
             fee: params._fee
         });
 
-        address _poolAddress = PoolAddress.computeAddress(address(factory), _poolKey);
-        require (_poolAddress != address(0));
-        _pool = IUniswapV3Pool(_poolAddress);
+        _pool = IUniswapV3Pool(PoolAddress.computeAddress(address(factory), _poolKey));
 
         (_tickLower, _tickUpper, _liquidity, _orderType) = utils.calculateLimitTicks(
             _pool,
@@ -207,7 +206,7 @@ contract LimitOrderManager is
             _tickLower,
             _tickUpper,
             _liquidity,
-            abi.encode(MintCallbackData({poolKey: _poolKey, payer: msg.sender}))
+            abi.encode(MintCallbackData({poolKey: _poolKey, payer: msg.sender, native: params.native}))
         );
 
         _mint(msg.sender, (_tokenId = nextId++));
@@ -216,14 +215,16 @@ contract LimitOrderManager is
 
             activeOrders[msg.sender] = activeOrders[msg.sender].add(1);
             uint32 _selectedIndex = _selectMonitor();
-            nextMonitor = _selectedIndex + 1;
+            if (nextMonitor != _selectedIndex) {
+                nextMonitor = _selectedIndex;
+            }
 
             (, uint256 _feeGrowthInside0LastX128, uint256 _feeGrowthInside1LastX128, , ) = _pool.positions(
                 PositionKey.compute(address(this), _tickLower, _tickUpper)
             );
 
             limitOrders[_tokenId] = LimitOrder({
-                pool: _poolAddress,
+                pool: address(_pool),
                 monitor: _selectedIndex,
                 tickLower: _tickLower,
                 tickUpper: _tickUpper,
@@ -378,8 +379,8 @@ contract LimitOrderManager is
         MintCallbackData memory decoded = abi.decode(data, (MintCallbackData));
         CallbackValidation.verifyCallback(address(factory), decoded.poolKey);
 
-        _approveAndTransferToUniswap(msg.sender, decoded.poolKey.token0, amount0Owed, decoded.payer);
-        _approveAndTransferToUniswap(msg.sender, decoded.poolKey.token1, amount1Owed, decoded.payer);
+        _approveAndTransferToUniswap(msg.sender, decoded.poolKey.token0, amount0Owed, decoded.payer, decoded.native);
+        _approveAndTransferToUniswap(msg.sender, decoded.poolKey.token1, amount1Owed, decoded.payer, decoded.native);
     }
 
     function orders(uint256 tokenId)
@@ -586,9 +587,19 @@ contract LimitOrderManager is
         uint256 monitorLength = monitors.length;
         require(monitorLength > 0);
 
-        _selectedIndex = nextMonitor == monitorLength
+        _selectedIndex = nextMonitor;
+        // check if selected index is full
+        IOrderMonitor monitor = monitors[_selectedIndex];
+        while (monitor.getTokenIdsLength() + 1 > monitor.monitorSize()) {
+            // next
+            _selectedIndex = _selectedIndex + 1;
+            _selectedIndex = _selectedIndex == monitorLength
             ? 0
-            : nextMonitor;
+            : _selectedIndex;
+
+            require(_selectedIndex != nextMonitor);
+            monitor = monitors[_selectedIndex];
+        }
     }
 
     /// @dev Casts uint256 to uint128 with overflow check.
@@ -599,11 +610,11 @@ contract LimitOrderManager is
 
     /// @dev Approve transfer to position manager
     function _approveAndTransferToUniswap(address _recipient, 
-        address _token, uint256 _amount, address _owner) private {
+        address _token, uint256 _amount, address _owner, bool native) private {
 
         if (_amount > 0) {
             // transfer tokens to contract
-            if (_token == address(WETH)) {
+            if (_token == address(WETH) && native) {
                 // if _token is WETH --> wrap it first
                 WETH.deposit{value: _amount}();
                 require(WETH.transfer(_recipient, _amount));
@@ -625,6 +636,33 @@ contract LimitOrderManager is
         }
     }
 
+    function tokensOfOwner(address _owner) external view returns(
+        uint256[] memory ownerTokens
+    ) {
+
+        uint256 tokenCount = balanceOf(_owner);
+
+        if (tokenCount == 0) {
+            // Return an empty array
+            return new uint256[](0);
+        } else {
+            uint256[] memory result = new uint256[](tokenCount);
+            uint256 totalTokens = nextId - 1;
+            uint256 resultIndex = 0;
+
+            uint256 tokenId;
+
+            for (tokenId = 1; tokenId <= totalTokens; tokenId++) {
+                address tokenOwner = _owners[tokenId];
+                if (tokenOwner != address(0) && tokenOwner == _owner) {
+                    result[resultIndex] = tokenId;
+                    resultIndex++;
+                }
+            }
+
+            return result;
+        }
+    }
 
     function _removeLiquidity(
         IUniswapV3Pool _pool,

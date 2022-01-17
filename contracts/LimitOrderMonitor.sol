@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/Initializable.sol";
 
 import "@chainlink/contracts/src/v0.7/interfaces/KeeperCompatibleInterface.sol";
 import "@chainlink/contracts/src/v0.7/interfaces/AggregatorV3Interface.sol";
+import "@chainlink/contracts/src/v0.7/KeeperBase.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
@@ -19,7 +20,8 @@ import "./interfaces/IOrderManager.sol";
 contract LimitOrderMonitor is
     Initializable,
     IOrderMonitor,
-    KeeperCompatibleInterface {
+    KeeperCompatibleInterface,
+    KeeperBase {
 
     using SafeMath for uint256;
 
@@ -79,7 +81,7 @@ contract LimitOrderMonitor is
     uint256 public batchSize;
 
     /// @dev max monitor size
-    uint256 public monitorSize;
+    uint256 public override monitorSize;
 
     /// @dev interval between 2 upkeeps, in blocks
     uint256 public upkeepInterval;
@@ -130,7 +132,7 @@ contract LimitOrderMonitor is
     function checkUpkeep(
         bytes calldata
     )
-    external override
+    external override cannotExecute
     returns (
         bool upkeepNeeded,
         bytes memory performData
@@ -290,6 +292,10 @@ contract LimitOrderMonitor is
         if (_amount > 0) {
             TransferHelper.safeTransfer(address(KROM), _owner, _amount);
         }
+    }
+
+    function getTokenIdsLength() external view override returns (uint256) {
+        return tokenIds.length;
     }
 
     function isAuthorizedController() internal view {
