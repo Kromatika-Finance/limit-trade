@@ -20,8 +20,14 @@
     "deploy-reset": "truffle migrate --reset --compile-all",
     "deploy-local-dapp": "npm run truffle:deploy:dapp --network=development",
     "deploy-opt-dapp": "npm run truffle:deploy:dapp --network=optimism",
+    "deploy-live-local": "npm run truffle:deploy:dapp --network=development",
+    "deploy-live-dapp": "npm run truffle:deploy:dapp --network=mainnet",
+    "deploy-kovan-keeper": "npm run truffle:deploy:keeper --network=kovan",
+    "deploy-live-keeper": "npm run truffle:deploy:keeper --network=mainnet",
+    "prepare-upgrade-manager": "npm run truffle:prepare:upgrade --network=optimism",
     "truffle:deploy:token": "truffle migrate --compile-all  -f 2 --to 2 --network $npm_config_network",
     "truffle:deploy:dapp": "truffle migrate --compile-all  -f 3 --network $npm_config_network",
+    "truffle:prepare:upgrade": "truffle migrate -f 5 --to 5 --network $npm_config_network",
     "lint": "solhint contracts/*.sol --formatter stylish",
     "lint:fix": "solhint contracts/*.sol --formatter stylish --fix",
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -54,6 +60,6 @@
     "@openzeppelin/truffle-upgrades": "^1.11.0",
     "solc-0.7": "npm:solc@^0.7.0",
     "solidity-docgen": "^0.5.14",
-    "truffle-plugin-verify": "^0.5.15"
+    "truffle-plugin-verify": "0.5.21"
   }
 }

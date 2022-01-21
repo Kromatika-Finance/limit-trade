@@ -25,7 +25,7 @@ console.log(process.env.RPC_URL)
 console.log(process.env.MNEMONIC)
 
 const gasPrice = process.env.GAS_PRICE ? process.env.GAS_PRICE : 3000000000; // 3gwei
-const gasLimit = process.env.GAS_LIMIT ? process.env.GAS_LIMIT : 200000000;   //
+const gasLimit = process.env.GAS_LIMIT ? process.env.GAS_LIMIT : 6000000;   //
 
 //
 // const fs = require('fs');
@@ -103,11 +103,11 @@ module.exports = {
         "mainnet":{
             provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
             network_id: 1,
-            skipDryRun: false,
+            skipDryRun: true,
             timeoutBlocks: 1000,
+            networkCheckTimeout: 5000000,
             websockets: true,
-            gasPrice: gasPrice,
-            gas: gasLimit
+            gasPrice: gasPrice
         },
         // Another network with more advanced options...
         // advanced: {
@@ -171,6 +171,7 @@ module.exports = {
         'truffle-contract-size'
     ],
     api_keys: {
-        etherscan: process.env.ETHERSCAN_API_KEY
+        etherscan: process.env.ETHERSCAN_API_KEY,
+        optimistic_etherscan: process.env.ETHERSCAN_API_KEY
     }
 }
