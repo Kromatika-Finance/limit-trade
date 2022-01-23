@@ -59,7 +59,7 @@ contract UniswapUtils is IUniswapUtils {
     external override view returns (uint256 quote) {
 
         address _poolAddress = factory.getPool(WETH, KROM, POOL_FEE);
-        require(_poolAddress != address(0));
+        require(_poolAddress != address(0), "UUC_PA");
 
         if (_weiAmount > 0) {
             (int24 arithmeticMeanTick,) = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
@@ -84,7 +84,7 @@ contract UniswapUtils is IUniswapUtils {
         uint128 bidLiquidity = _liquidityForAmounts(sqrtRatioX96, _bidLower, _bidUpper, _amount0, _amount1);
         uint128 askLiquidity = _liquidityForAmounts(sqrtRatioX96, _askLower, _askUpper, _amount0, _amount1);
 
-        require(bidLiquidity > 0 || askLiquidity > 0);
+        require(bidLiquidity > 0 || askLiquidity > 0, "UUC_BAL");
 
         if (bidLiquidity > askLiquidity) {
             (_lowerTick, _upperTick, _liquidity, _orderType) = (_bidLower, _bidUpper, bidLiquidity, uint128(1));
@@ -136,11 +136,11 @@ contract UniswapUtils is IUniswapUtils {
 
     function _checkRange(int24 _tickLower, int24 _tickUpper, int24 _tickSpacing) internal pure {
 
-        require(_tickLower < _tickUpper);
-        require(_tickLower >= TickMath.MIN_TICK);
-        require(_tickUpper <= TickMath.MAX_TICK);
-        require(_tickLower % _tickSpacing == 0);
-        require(_tickUpper % _tickSpacing == 0);
+        require(_tickLower < _tickUpper, "UUC_TLU");
+        require(_tickLower >= TickMath.MIN_TICK, "UUC_TLMIN");
+        require(_tickUpper <= TickMath.MAX_TICK, "UUC_TAMAX");
+        require(_tickLower % _tickSpacing == 0, "UUC_TLS");
+        require(_tickUpper % _tickSpacing == 0, "UUC_TUS");
     }
 
     /// @dev Rounds tick down towards negative infinity so that it's a multiple

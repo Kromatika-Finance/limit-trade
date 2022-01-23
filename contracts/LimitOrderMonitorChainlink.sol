@@ -61,7 +61,7 @@ contract LimitOrderMonitorChainlink is LimitOrderMonitor {
     function _transferFees(uint256 _amount, address _owner) internal virtual override  {
 
         if (_amount > 0) {
-            require(keeperId > 0);
+            require(keeperId > 0, "LOK_KP");
             // swap KROM into LINKs
             TransferHelper.safeApprove(address(KROM), address(swapRouter), _amount);
 

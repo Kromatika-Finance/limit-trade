@@ -177,7 +177,7 @@ contract LimitOrderManager is
             uint256 _tokenId
         ) {
 
-        require(params._token0 < params._token1);
+        require(params._token0 < params._token1, "LOM_TE");
 
         int24 _tickLower;
         int24 _tickUpper;
@@ -193,7 +193,7 @@ contract LimitOrderManager is
         });
 
         address _poolAddress = PoolAddress.computeAddress(address(factory), _poolKey);
-        require (_poolAddress != address(0));
+        require (_poolAddress != address(0), "LOM_PA");
         _pool = IUniswapV3Pool(_poolAddress);
 
         (_tickLower, _tickUpper, _liquidity, _orderType) = utils.calculateLimitTicks(
@@ -256,8 +256,8 @@ contract LimitOrderManager is
         returns (uint128 _amount0, uint128 _amount1) {
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
-        require(msg.sender == address(monitors[limitOrder.monitor]));
-        require(!limitOrder.processed);
+        require(msg.sender == address(monitors[limitOrder.monitor]), "LOM_LM");
+        require(!limitOrder.processed, "LOM_PR");
 
         // remove liqudiity
         (_amount0, _amount1) = _removeLiquidity(
@@ -310,7 +310,7 @@ contract LimitOrderManager is
         isAuthorizedForToken(_tokenId);
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
-        require(!limitOrder.processed);
+        require(!limitOrder.processed, "LOM_PR");
 
         (_amount0, _amount1) = _removeLiquidity(
             IUniswapV3Pool(limitOrder.pool),
@@ -347,7 +347,7 @@ contract LimitOrderManager is
 
         isAuthorizedForToken(_tokenId);
         // remove information related to tokenId
-        require(limitOrders[_tokenId].processed);
+        require(limitOrders[_tokenId].processed, "LOM_PR");
 
         delete limitOrders[_tokenId];
         _burn(_tokenId);
@@ -399,7 +399,7 @@ contract LimitOrderManager is
     )
     {
         LimitOrder memory limitOrder = limitOrders[tokenId];
-        require(limitOrder.pool != address(0));
+        require(limitOrder.pool != address(0), "LOM_LP");
         IUniswapV3Pool _pool = IUniswapV3Pool(limitOrder.pool);
         return (
             ownerOf(tokenId),
@@ -477,7 +477,7 @@ contract LimitOrderManager is
     function setMonitors(IOrderMonitor[] calldata _newMonitors) external {
 
         isAuthorizedController();
-        require(_newMonitors.length > 0);
+        require(_newMonitors.length > 0, "LOM_NM");
         monitors = _newMonitors;
     }
 
@@ -573,7 +573,7 @@ contract LimitOrderManager is
                 _tokensOwed1
             );
 
-        require(_tokensToSend0 > 0 || _tokensToSend1 > 0);
+        require(_tokensToSend0 > 0 || _tokensToSend1 > 0, "LOM_TS");
 
         _transferTokenTo(_pool.token0(), _tokensToSend0, _owner);
         _transferTokenTo(_pool.token1(), _tokensToSend1, _owner);
@@ -584,7 +584,7 @@ contract LimitOrderManager is
     function _selectMonitor() internal view returns (uint32 _selectedIndex) {
 
         uint256 monitorLength = monitors.length;
-        require(monitorLength > 0);
+        require(monitorLength > 0, "LOM_ML");
 
         _selectedIndex = nextMonitor == monitorLength
             ? 0
@@ -606,7 +606,7 @@ contract LimitOrderManager is
             if (_token == address(WETH)) {
                 // if _token is WETH --> wrap it first
                 WETH.deposit{value: _amount}();
-                require(WETH.transfer(_recipient, _amount));
+                require(WETH.transfer(_recipient, _amount), "LOM_WT");
             } else {
                 TransferHelper.safeTransferFrom(_token, _owner, _recipient, _amount);
             }
@@ -617,7 +617,7 @@ contract LimitOrderManager is
         if (_amount > 0) {
             if (_token == address(WETH)) {
                 // if token is WETH, withdraw and send back ETH
-                require(WETH.transfer(address(WETHExt), _amount));
+                require(WETH.transfer(address(WETHExt), _amount), "LOM_WET");
                 WETHExt.withdraw(_amount, _to, WETH);
             } else {
                 TransferHelper.safeTransfer(_token, _to, _amount);
@@ -671,11 +671,11 @@ contract LimitOrderManager is
     }
 
     function isAuthorizedForToken(uint256 tokenId) internal view {
-        require(_isApprovedOrOwner(msg.sender, tokenId));
+        require(_isApprovedOrOwner(msg.sender, tokenId), "LOM_AT");
     }
 
     function isAuthorizedController() internal view {
-        require(msg.sender == controller);
+        require(msg.sender == controller, "LOM_AC");
     }
 
     // Function to receive Ether. msg.data must be empty
