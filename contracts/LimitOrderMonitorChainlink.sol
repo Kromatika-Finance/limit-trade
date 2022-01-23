@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-pragma solidity >=0.7.5;
+pragma solidity 0.7.6;
 pragma abicoder v2;
 
 import "@chainlink/contracts/src/v0.7/interfaces/KeeperRegistryInterface.sol";
