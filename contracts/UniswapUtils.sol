@@ -3,6 +3,7 @@
 pragma solidity 0.7.6;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/Initializable.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
 import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
@@ -14,13 +15,26 @@ import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 import "./interfaces/IUniswapUtils.sol";
 
 // use library ?
-contract UniswapUtils is IUniswapUtils {
+contract UniswapUtils is IUniswapUtils, Initializable {
 
     using SafeMath for uint256;
 
     uint24 public constant POOL_FEE = 3000;
 
-    uint32 public constant TWAP_PERIOD = 60;
+    address public controller;
+
+    uint32 public twapPeriod;
+
+    /// @dev when controller has changed
+    event ControllerChanged(address from, address newValue);
+
+    /// @dev when twap was changed
+    event TwapPeriodChanged(address from, uint32 newValue);
+
+    function initialize() public initializer {
+        controller = msg.sender;
+        twapPeriod = 1800;
+    }
 
     function calculateLimitTicks(
         IUniswapV3Pool _pool,
@@ -62,7 +76,7 @@ contract UniswapUtils is IUniswapUtils {
         require(_poolAddress != address(0), "UUC_PA");
 
         if (_weiAmount > 0) {
-            (int24 arithmeticMeanTick,) = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
+            (int24 arithmeticMeanTick,) = OracleLibrary.consult(_poolAddress, twapPeriod);
             quote = OracleLibrary.getQuoteAtTick(
                 arithmeticMeanTick,
                 _toUint128(_weiAmount),
@@ -70,6 +84,20 @@ contract UniswapUtils is IUniswapUtils {
                 KROM
             );
         }
+    }
+
+    function changeController(address _controller) external {
+
+        isAuthorizedController();
+        controller = _controller;
+        emit ControllerChanged(msg.sender, _controller);
+    }
+
+    function changeTwapPeriod(uint32 _twapPeriod) external {
+
+        isAuthorizedController();
+        twapPeriod = _twapPeriod;
+        emit TwapPeriodChanged(msg.sender, _twapPeriod);
     }
 
     function _checkLiquidityRange(int24 _bidLower, int24 _bidUpper,
@@ -97,6 +125,10 @@ contract UniswapUtils is IUniswapUtils {
     function _toUint128(uint256 x) internal pure returns (uint128) {
         require(x <= type(uint128).max, "UUC_IC");
         return uint128(x);
+    }
+
+    function isAuthorizedController() internal view {
+        require(msg.sender == controller, "UUC_AC");
     }
 
     /// @dev Wrapper around `LiquidityAmounts.getLiquidityForAmounts()`.
