@@ -95,7 +95,7 @@ contract UniswapUtils is IUniswapUtils {
 
     /// @dev Casts uint256 to uint128 with overflow check.
     function _toUint128(uint256 x) internal pure returns (uint128) {
-        assert(x <= type(uint128).max);
+        require(x <= type(uint128).max, "UUC_IC");
         return uint128(x);
     }
 
