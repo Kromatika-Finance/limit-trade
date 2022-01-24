@@ -457,6 +457,20 @@ contract LimitOrderManager is
         return _isUnderfunded(_owner, _targetGasPrice);
     }
 
+    function _beforeTokenTransfer(
+        address from,
+        address to,
+        uint256 tokenId
+    ) internal virtual override {
+
+        if (from != address(0) && to != address(0) && !limitOrders[tokenId].processed) {
+            // valid transfer; update activeOrders
+            activeOrders[from] = activeOrders[from].sub(1);
+            activeOrders[to] = activeOrders[to].add(1);
+        }
+        super._beforeTokenTransfer(from, to, tokenId);
+    }
+
     function _isUnderfunded(address _owner, uint256 _targetGasPrice) internal returns (
         bool underfunded, uint256 amount, uint256 _serviceFee, uint256 _monitorFee
     ) {
