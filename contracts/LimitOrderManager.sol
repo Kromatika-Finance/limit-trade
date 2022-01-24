@@ -133,11 +133,12 @@ contract LimitOrderManager is
     /// @dev last monitor index + 1 ; always > 0
     uint32 public nextMonitor;
 
-    /// @notice Initializes the smart contract instead of a constructorr
+    /// @notice Initializes the smart contract instead of a constructor
     /// @param  _factory univ3 factory
     /// @param  _WETH wrapped ETH
     /// @param  _utils limit manager utils
     /// @param  _KROM kromatika token
+    /// @param  _monitors monitors array
     /// @param  _feeAddress protocol fee address
     /// @param  _gasUsageMonitor estimated gas usage of monitors
     /// @param  _protocolFee charged fee
@@ -147,6 +148,7 @@ contract LimitOrderManager is
             WETHExtended _WETHExtended,
             IUniswapUtils _utils,
             IERC20 _KROM,
+            IOrderMonitor[] calldata _monitors,
             address _feeAddress,
             uint256 _gasUsageMonitor,
             uint32  _protocolFee
@@ -161,6 +163,7 @@ contract LimitOrderManager is
         gasUsageMonitor = _gasUsageMonitor;
         protocolFee = _protocolFee;
         feeAddress = _feeAddress;
+        monitors = _monitors;
 
         nextId = 1;
         controller = msg.sender;
