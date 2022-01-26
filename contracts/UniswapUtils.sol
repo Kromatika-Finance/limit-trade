@@ -3,6 +3,7 @@
 pragma solidity 0.7.6;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/utils/SafeCast.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/Initializable.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
@@ -18,6 +19,7 @@ import "./interfaces/IUniswapUtils.sol";
 contract UniswapUtils is IUniswapUtils, Initializable {
 
     using SafeMath for uint256;
+    using SafeCast for uint256;
 
     uint24 public constant POOL_FEE = 3000;
 
@@ -79,7 +81,7 @@ contract UniswapUtils is IUniswapUtils, Initializable {
             (int24 arithmeticMeanTick,) = OracleLibrary.consult(_poolAddress, twapPeriod);
             quote = OracleLibrary.getQuoteAtTick(
                 arithmeticMeanTick,
-                _toUint128(_weiAmount),
+                _weiAmount.toUint128(),
                 WETH,
                 KROM
             );
@@ -119,12 +121,6 @@ contract UniswapUtils is IUniswapUtils, Initializable {
         } else {
             (_lowerTick, _upperTick, _liquidity, _orderType) = (_askLower, _askUpper, askLiquidity, uint128(2));
         }
-    }
-
-    /// @dev Casts uint256 to uint128 with overflow check.
-    function _toUint128(uint256 x) internal pure returns (uint128) {
-        require(x <= type(uint128).max, "UUC_IC");
-        return uint128(x);
     }
 
     function isAuthorizedController() internal view {
