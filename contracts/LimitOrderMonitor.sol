@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-pragma solidity >=0.7.5;
+pragma solidity 0.7.6;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
@@ -72,9 +72,6 @@ contract LimitOrderMonitor is
     /// @dev krom token
     IERC20 public KROM;
 
-    /// @dev last upkeep block
-    uint256 public lastUpkeep;
-
     /// @dev max batch size
     uint256 public batchSize;
 
@@ -89,8 +86,7 @@ contract LimitOrderMonitor is
         IERC20 _KROM,
         address _keeper,
         uint256 _batchSize,
-        uint256 _monitorSize,
-        uint256 _upkeepInterval) public initializer {
+        uint256 _monitorSize) public initializer {
 
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
         require(_monitorSize <= MAX_MONITOR_SIZE, "INVALID_MONITOR_SIZE");
@@ -102,7 +98,6 @@ contract LimitOrderMonitor is
 
         batchSize = _batchSize;
         monitorSize = _monitorSize;
-        upkeepInterval = _upkeepInterval;
 
         controller = msg.sender;
         keeper = _keeper;
@@ -136,31 +131,29 @@ contract LimitOrderMonitor is
         bytes memory performData
     ) {
 
-        if (upkeepNeeded = (_getBlockNumber() - lastUpkeep) > upkeepInterval) {
-            uint256 _tokenId;
-            uint256[] memory batchTokenIds = new uint256[](batchSize);
-            uint256 count;
+        uint256 _tokenId;
+        uint256[] memory batchTokenIds = new uint256[](batchSize);
+        uint256 count;
 
-            // iterate through all active tokens;
-            for (uint256 i = 0; i < tokenIds.length; i++) {
-                _tokenId = tokenIds[i];
-                (upkeepNeeded,,) = orderManager.canProcess(
-                    _tokenId,
-                    _getGasPrice(tx.gasprice)
-                );
-                if (upkeepNeeded) {
-                    batchTokenIds[count] = _tokenId;
-                    count++;
-                }
-                if (count >= batchSize) {
-                    break;
-                }
-            }
-
-            upkeepNeeded = count > 0;
+        // iterate through all active tokens;
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            _tokenId = tokenIds[i];
+            (upkeepNeeded,,) = orderManager.canProcess(
+                _tokenId,
+                _getGasPrice(tx.gasprice)
+            );
             if (upkeepNeeded) {
-                performData = abi.encode(batchTokenIds, count);
+                batchTokenIds[count] = _tokenId;
+                count++;
             }
+            if (count >= batchSize) {
+                break;
+            }
+        }
+
+        upkeepNeeded = count > 0;
+        if (upkeepNeeded) {
+            performData = abi.encode(batchTokenIds, count);
         }
     }
 
@@ -184,7 +177,8 @@ contract LimitOrderMonitor is
             uint256 _monitorFee;
             uint256 _tokenId;
 
-            require(_count <= _tokenIds.length);
+            require(_count <= _tokenIds.length, "LOC_CL");
+            require(_count <= batchSize, "LOC_BS");
             for (uint256 i = 0; i < _count; i++) {
                 _tokenId = _tokenIds[i];
                 (validTrade, _serviceFee, _monitorFee) = orderManager.canProcess(_tokenId, tx.gasprice);
@@ -200,11 +194,9 @@ contract LimitOrderMonitor is
             }
         }
 
-        require(validCount > 0);
+        require(validCount > 0, "LOC_VC");
 
         _gasUsed = _gasUsed - gasleft();
-        lastUpkeep = _getBlockNumber();
-
         // send the paymentPaid to the keeper
         _transferFees(monitorFeePaid, keeper);
         // send the diff to the fee address
@@ -280,12 +272,6 @@ contract LimitOrderMonitor is
         gasPrice = _txnGasPrice > 0 ? _txnGasPrice : 0;
     }
 
-    // TODO (override block numbers for L2)
-    function _getBlockNumber() internal virtual view
-    returns (uint256 blockNumber) {
-        blockNumber = block.number;
-    }
-
     function _transferFees(uint256 _amount, address _owner) internal virtual {
         if (_amount > 0) {
             TransferHelper.safeTransfer(address(KROM), _owner, _amount);
@@ -293,11 +279,11 @@ contract LimitOrderMonitor is
     }
 
     function isAuthorizedController() internal view {
-        require(msg.sender == controller);
+        require(msg.sender == controller, "LOC_AC");
     }
 
     function isAuthorizedTradeManager() internal view {
-        require(msg.sender == address(orderManager));
+        require(msg.sender == address(orderManager), "LOC_ATM");
     }
 
     /// @notice Removes index element from the given array.

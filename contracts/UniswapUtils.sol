@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-pragma solidity >=0.7.5;
+pragma solidity 0.7.6;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/utils/SafeCast.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/Initializable.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
 import "@uniswap/v3-periphery/contracts/libraries/OracleLibrary.sol";
@@ -14,13 +16,27 @@ import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 import "./interfaces/IUniswapUtils.sol";
 
 // use library ?
-contract UniswapUtils is IUniswapUtils {
+contract UniswapUtils is IUniswapUtils, Initializable {
 
     using SafeMath for uint256;
+    using SafeCast for uint256;
 
     uint24 public constant POOL_FEE = 3000;
 
-    uint32 public constant TWAP_PERIOD = 60;
+    address public controller;
+
+    uint32 public twapPeriod;
+
+    /// @dev when controller has changed
+    event ControllerChanged(address from, address newValue);
+
+    /// @dev when twap was changed
+    event TwapPeriodChanged(address from, uint32 newValue);
+
+    function initialize() public initializer {
+        controller = msg.sender;
+        twapPeriod = 1800;
+    }
 
     function calculateLimitTicks(
         IUniswapV3Pool _pool,
@@ -59,17 +75,31 @@ contract UniswapUtils is IUniswapUtils {
     external override view returns (uint256 quote) {
 
         address _poolAddress = factory.getPool(WETH, KROM, POOL_FEE);
-        require(_poolAddress != address(0));
+        require(_poolAddress != address(0), "UUC_PA");
 
         if (_weiAmount > 0) {
-            (int24 arithmeticMeanTick,) = OracleLibrary.consult(_poolAddress, TWAP_PERIOD);
+            (int24 arithmeticMeanTick,) = OracleLibrary.consult(_poolAddress, twapPeriod);
             quote = OracleLibrary.getQuoteAtTick(
                 arithmeticMeanTick,
-                _toUint128(_weiAmount),
+                _weiAmount.toUint128(),
                 WETH,
                 KROM
             );
         }
+    }
+
+    function changeController(address _controller) external {
+
+        isAuthorizedController();
+        controller = _controller;
+        emit ControllerChanged(msg.sender, _controller);
+    }
+
+    function changeTwapPeriod(uint32 _twapPeriod) external {
+
+        isAuthorizedController();
+        twapPeriod = _twapPeriod;
+        emit TwapPeriodChanged(msg.sender, _twapPeriod);
     }
 
     function _checkLiquidityRange(int24 _bidLower, int24 _bidUpper,
@@ -84,7 +114,7 @@ contract UniswapUtils is IUniswapUtils {
         uint128 bidLiquidity = _liquidityForAmounts(sqrtRatioX96, _bidLower, _bidUpper, _amount0, _amount1);
         uint128 askLiquidity = _liquidityForAmounts(sqrtRatioX96, _askLower, _askUpper, _amount0, _amount1);
 
-        require(bidLiquidity > 0 || askLiquidity > 0);
+        require(bidLiquidity > 0 || askLiquidity > 0, "UUC_BAL");
 
         if (bidLiquidity > askLiquidity) {
             (_lowerTick, _upperTick, _liquidity, _orderType) = (_bidLower, _bidUpper, bidLiquidity, uint128(1));
@@ -93,10 +123,8 @@ contract UniswapUtils is IUniswapUtils {
         }
     }
 
-    /// @dev Casts uint256 to uint128 with overflow check.
-    function _toUint128(uint256 x) internal pure returns (uint128) {
-        assert(x <= type(uint128).max);
-        return uint128(x);
+    function isAuthorizedController() internal view {
+        require(msg.sender == controller, "UUC_AC");
     }
 
     /// @dev Wrapper around `LiquidityAmounts.getLiquidityForAmounts()`.
@@ -136,11 +164,11 @@ contract UniswapUtils is IUniswapUtils {
 
     function _checkRange(int24 _tickLower, int24 _tickUpper, int24 _tickSpacing) internal pure {
 
-        require(_tickLower < _tickUpper);
-        require(_tickLower >= TickMath.MIN_TICK);
-        require(_tickUpper <= TickMath.MAX_TICK);
-        require(_tickLower % _tickSpacing == 0);
-        require(_tickUpper % _tickSpacing == 0);
+        require(_tickLower < _tickUpper, "UUC_TLU");
+        require(_tickLower >= TickMath.MIN_TICK, "UUC_TLMIN");
+        require(_tickUpper <= TickMath.MAX_TICK, "UUC_TAMAX");
+        require(_tickLower % _tickSpacing == 0, "UUC_TLS");
+        require(_tickUpper % _tickSpacing == 0, "UUC_TUS");
     }
 
     /// @dev Rounds tick down towards negative infinity so that it's a multiple
