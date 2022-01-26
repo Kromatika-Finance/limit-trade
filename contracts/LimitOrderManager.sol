@@ -128,7 +128,7 @@ contract LimitOrderManager is
     uint256 public gasUsageMonitor;
 
     /// @dev The ID of the next token that will be minted. Skips 0
-    uint176 private nextId;
+    uint256 private nextId;
 
     /// @dev last monitor index + 1 ; always > 0
     uint32 public nextMonitor;
