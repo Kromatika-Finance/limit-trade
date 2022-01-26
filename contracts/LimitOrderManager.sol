@@ -4,6 +4,7 @@ pragma solidity 0.7.6;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/utils/SafeCast.sol";
 import '@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol';
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
@@ -35,6 +36,7 @@ contract LimitOrderManager is
     SelfPermit {
 
     using SafeMath for uint256;
+    using SafeCast for uint256;
 
     uint256 public constant PROTOCOL_FEE_MULTIPLIER = 100000;
 
@@ -213,13 +215,14 @@ contract LimitOrderManager is
             abi.encode(MintCallbackData({poolKey: _poolKey, payer: msg.sender}))
         );
 
-        _mint(msg.sender, (_tokenId = nextId++));
+        nextId = nextId.add(1);
+        _mint(msg.sender, (_tokenId = nextId));
 
         {
 
             activeOrders[msg.sender] = activeOrders[msg.sender].add(1);
             uint32 _selectedIndex = _selectMonitor();
-            nextMonitor = _selectedIndex + 1;
+            nextMonitor = uint256(_selectedIndex).add(1).toUint32();
 
             (, uint256 _feeGrowthInside0LastX128, uint256 _feeGrowthInside1LastX128, , ) = _pool.positions(
                 PositionKey.compute(address(this), _tickLower, _tickUpper)
@@ -337,8 +340,8 @@ contract LimitOrderManager is
             IUniswapV3Pool(limitOrder.pool),
             limitOrder.tickLower,
             limitOrder.tickUpper,
-            _toUint128(_amount0),
-            _toUint128(_amount1),
+            _amount0.toUint128(),
+            _amount1.toUint128(),
             msg.sender
         );
 
@@ -608,12 +611,6 @@ contract LimitOrderManager is
             : nextMonitor;
     }
 
-    /// @dev Casts uint256 to uint128 with overflow check.
-    function _toUint128(uint256 x) internal pure returns (uint128) {
-        require(x <= type(uint128).max, "LOM_IC");
-        return uint128(x);
-    }
-
     /// @dev Approve transfer to position manager
     function _approveAndTransferToUniswap(address _recipient, 
         address _token, uint256 _amount, address _owner) private {
@@ -665,21 +662,21 @@ contract LimitOrderManager is
             bytes32 positionKey = PositionKey.compute(address(this), _tickLower, _tickUpper);
             (, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, , ) = _pool.positions(positionKey);
 
-            tokensOwed0 = uint128(amount0) + uint128(
+            tokensOwed0 = amount0.add(
                 FullMath.mulDiv(
                     feeGrowthInside0LastX128 - _feeGrowthInside0LastX128,
                     _liquidity,
                     FixedPoint128.Q128
                 )
-            );
+            ).toUint128();
 
-            tokensOwed1 = uint128(amount1) + uint128(
+            tokensOwed1 = amount1.add(
                 FullMath.mulDiv(
                     feeGrowthInside1LastX128 - _feeGrowthInside1LastX128,
                     _liquidity,
                     FixedPoint128.Q128
                 )
-            );
+            ).toUint128();
         }
     }
 
