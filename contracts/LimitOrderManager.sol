@@ -215,8 +215,8 @@ contract LimitOrderManager is
             abi.encode(MintCallbackData({poolKey: _poolKey, payer: msg.sender}))
         );
 
-        nextId = nextId.add(1);
         _mint(msg.sender, (_tokenId = nextId));
+        nextId = nextId.add(1);
 
         {
 
