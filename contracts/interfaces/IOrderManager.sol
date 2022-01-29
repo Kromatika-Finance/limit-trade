@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-pragma solidity >=0.7.5;
+pragma solidity 0.7.6;
 pragma abicoder v2;
 
 interface IOrderManager {
@@ -12,7 +12,6 @@ interface IOrderManager {
         uint160 _sqrtPriceX96;
         uint128 _amount0;
         uint128 _amount1;
-        bool native;
     }
 
     function placeLimitOrder(LimitOrderParams calldata params) external payable returns (uint256 tokenId);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-pragma solidity >=0.7.5;
+pragma solidity 0.7.6;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
@@ -186,7 +186,8 @@ contract LimitOrderMonitor is
             uint256 _monitorFee;
             uint256 _tokenId;
 
-            require(_count <= _tokenIds.length);
+            require(_count <= _tokenIds.length, "LOC_CL");
+            require(_count <= batchSize, "LOC_BS");
             for (uint256 i = 0; i < _count; i++) {
                 _tokenId = _tokenIds[i];
                 (validTrade, _serviceFee, _monitorFee) = orderManager.canProcess(_tokenId, tx.gasprice);
@@ -202,7 +203,7 @@ contract LimitOrderMonitor is
             }
         }
 
-        require(validCount > 0);
+        require(validCount > 0, "LOC_VC");
 
         _gasUsed = _gasUsed - gasleft();
         lastUpkeep = _getBlockNumber();
@@ -299,11 +300,11 @@ contract LimitOrderMonitor is
     }
 
     function isAuthorizedController() internal view {
-        require(msg.sender == controller);
+        require(msg.sender == controller, "LOC_AC");
     }
 
     function isAuthorizedTradeManager() internal view {
-        require(msg.sender == address(orderManager));
+        require(msg.sender == address(orderManager), "LOC_ATM");
     }
 
     /// @notice Removes index element from the given array.
