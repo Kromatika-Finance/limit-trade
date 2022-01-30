@@ -135,6 +135,8 @@ contract LimitOrderManager is
     /// @dev last monitor index + 1 ; always > 0
     uint32 public nextMonitor;
 
+    constructor () initializer {}
+
     /// @notice Initializes the smart contract instead of a constructor
     /// @param  _factory univ3 factory
     /// @param  _WETH wrapped ETH
