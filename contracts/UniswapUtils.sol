@@ -33,6 +33,8 @@ contract UniswapUtils is IUniswapUtils, Initializable {
     /// @dev when twap was changed
     event TwapPeriodChanged(address from, uint32 newValue);
 
+    constructor () initializer {}
+
     function initialize() public initializer {
         controller = msg.sender;
         twapPeriod = 1800;
