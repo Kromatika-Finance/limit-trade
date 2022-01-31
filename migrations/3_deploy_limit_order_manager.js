@@ -12,16 +12,16 @@ module.exports = async function (deployer, network, accounts) {
 
   const kromatikaInstance = await Kromatika.deployed();
 
-  await deployProxy(UniswapUtils, [0], {deployer});
+  await deployProxy(UniswapUtils, [], {deployer, unsafeAllow: ['constructor']});
   await deployer.deploy(WETHExtended);
 
   const managerUtilsInstance = await UniswapUtils.deployed();
   const WETHExtendedInstance = await WETHExtended.deployed();
 
-  // 600k gas usage, 10% protocol fee
+  // 300k gas usage, 10% protocol fee
   await deployProxy(LimitOrderManager,
       [uniswapFactory, wrappedETHAddress, WETHExtendedInstance.address,
-        managerUtilsInstance.address, kromatikaInstance.address,
+        managerUtilsInstance.address, kromatikaInstance.address, [],
         feeAddress, 300000, 10000],
-      {deployer, unsafeAllow: ['delegatecall']});
+      {deployer, unsafeAllow: ['delegatecall', 'constructor']});
 };
