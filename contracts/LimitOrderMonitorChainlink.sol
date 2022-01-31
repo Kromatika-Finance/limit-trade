@@ -14,8 +14,6 @@ contract LimitOrderMonitorChainlink is LimitOrderMonitor {
     /// @dev fast gas
     AggregatorV3Interface public FAST_GAS_FEED;
 
-    constructor () initializer {}
-
     function initialize(IOrderManager _orderManager,
         IUniswapV3Factory _factory,
         IERC20 _KROM,

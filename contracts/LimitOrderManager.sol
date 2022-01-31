@@ -321,11 +321,15 @@ contract LimitOrderManager is
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
         require(!limitOrder.processed, "LOM_PR");
+        address poolAddress = limitOrder.pool;
+        uint32 monitorIndex = limitOrder.monitor;
+        int24 tickLower = limitOrder.tickLower;
+        int24 tickUpper = limitOrder.tickUpper;
 
         (_amount0, _amount1) = _removeLiquidity(
-            IUniswapV3Pool(limitOrder.pool),
-            limitOrder.tickLower,
-            limitOrder.tickUpper,
+            IUniswapV3Pool(poolAddress),
+            tickLower,
+            tickUpper,
             limitOrder.liquidity,
             limitOrder.feeGrowthInside0LastX128,
             limitOrder.feeGrowthInside1LastX128
@@ -336,20 +340,22 @@ contract LimitOrderManager is
         // burn the token
         _burn(_tokenId);
 
+        // delete lo
+        delete limitOrders[_tokenId];
+
         // stop monitor
-        monitors[limitOrder.monitor].stopMonitor(_tokenId);
+        monitors[monitorIndex].stopMonitor(_tokenId);
         // collect the funds
         _collect(
             _tokenId,
-            IUniswapV3Pool(limitOrder.pool),
-            limitOrder.tickLower,
-            limitOrder.tickUpper,
+            IUniswapV3Pool(poolAddress),
+            tickLower,
+            tickUpper,
             _amount0.toUint128(),
             _amount1.toUint128(),
             msg.sender
         );
 
-        delete limitOrders[_tokenId];
         emit LimitOrderCancelled(msg.sender, _tokenId, _amount0, _amount1);
     }
 
@@ -682,10 +688,6 @@ contract LimitOrderManager is
                 )
             ).toUint128();
         }
-    }
-
-    function _blockNumber() internal view returns (uint256) {
-        return block.number;
     }
 
     function isAuthorizedForToken(uint256 tokenId) internal view {
