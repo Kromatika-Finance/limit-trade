@@ -209,18 +209,20 @@ contract LimitOrderManager is
             params._amount0,
             params._amount1
         );
-        _pool.mint(
-            address(this),
-            _tickLower,
-            _tickUpper,
-            _liquidity,
-            abi.encode(MintCallbackData({poolKey: _poolKey, payer: msg.sender}))
-        );
-
-        _mint(msg.sender, (_tokenId = nextId));
-        nextId = nextId.add(1);
 
         {
+
+            (uint256 _amount0, uint256 _amount1) = _pool.mint(
+                address(this),
+                _tickLower,
+                _tickUpper,
+                _liquidity,
+                abi.encode(MintCallbackData({poolKey: _poolKey, payer: msg.sender}))
+            );
+            require(_amount0 >= params._amount0Min && _amount1 >= params._amount1Min, 'LOM_PS');
+
+            _mint(msg.sender, (_tokenId = nextId));
+            nextId = nextId.add(1);
 
             activeOrders[msg.sender] = activeOrders[msg.sender].add(1);
             uint32 _selectedIndex = _selectMonitor();
@@ -239,8 +241,8 @@ contract LimitOrderManager is
                 processed: false,
                 feeGrowthInside0LastX128: _feeGrowthInside0LastX128,
                 feeGrowthInside1LastX128: _feeGrowthInside1LastX128,
-                tokensOwed0: params._amount0,
-                tokensOwed1: params._amount1
+                tokensOwed0: _amount0.toUint128(),
+                tokensOwed1: _amount1.toUint128()
             });
 
             monitors[_selectedIndex].startMonitor(_tokenId);
@@ -619,7 +621,7 @@ contract LimitOrderManager is
 
         if (_amount > 0) {
             // transfer tokens to contract
-            if (_token == address(WETH)) {
+            if (_token == address(WETH) && address(this).balance >= _amount) {
                 // if _token is WETH --> wrap it first
                 WETH.deposit{value: _amount}();
                 require(WETH.transfer(_recipient, _amount), "LOM_WT");
