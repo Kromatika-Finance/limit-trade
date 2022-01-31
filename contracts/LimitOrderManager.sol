@@ -135,6 +135,8 @@ contract LimitOrderManager is
     /// @dev last monitor index + 1 ; always > 0
     uint32 public nextMonitor;
 
+    constructor () initializer {}
+
     /// @notice Initializes the smart contract instead of a constructor
     /// @param  _factory univ3 factory
     /// @param  _WETH wrapped ETH
@@ -207,18 +209,20 @@ contract LimitOrderManager is
             params._amount0,
             params._amount1
         );
-        _pool.mint(
-            address(this),
-            _tickLower,
-            _tickUpper,
-            _liquidity,
-            abi.encode(MintCallbackData({poolKey: _poolKey, payer: msg.sender}))
-        );
-
-        _mint(msg.sender, (_tokenId = nextId));
-        nextId = nextId.add(1);
 
         {
+
+            (uint256 _amount0, uint256 _amount1) = _pool.mint(
+                address(this),
+                _tickLower,
+                _tickUpper,
+                _liquidity,
+                abi.encode(MintCallbackData({poolKey: _poolKey, payer: msg.sender}))
+            );
+            require(_amount0 >= params._amount0Min && _amount1 >= params._amount1Min, 'LOM_PS');
+
+            _mint(msg.sender, (_tokenId = nextId));
+            nextId = nextId.add(1);
 
             activeOrders[msg.sender] = activeOrders[msg.sender].add(1);
             uint32 _selectedIndex = _selectMonitor();
@@ -237,8 +241,8 @@ contract LimitOrderManager is
                 processed: false,
                 feeGrowthInside0LastX128: _feeGrowthInside0LastX128,
                 feeGrowthInside1LastX128: _feeGrowthInside1LastX128,
-                tokensOwed0: params._amount0,
-                tokensOwed1: params._amount1
+                tokensOwed0: _amount0.toUint128(),
+                tokensOwed1: _amount1.toUint128()
             });
 
             monitors[_selectedIndex].startMonitor(_tokenId);
@@ -317,11 +321,15 @@ contract LimitOrderManager is
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
         require(!limitOrder.processed, "LOM_PR");
+        address poolAddress = limitOrder.pool;
+        uint32 monitorIndex = limitOrder.monitor;
+        int24 tickLower = limitOrder.tickLower;
+        int24 tickUpper = limitOrder.tickUpper;
 
         (_amount0, _amount1) = _removeLiquidity(
-            IUniswapV3Pool(limitOrder.pool),
-            limitOrder.tickLower,
-            limitOrder.tickUpper,
+            IUniswapV3Pool(poolAddress),
+            tickLower,
+            tickUpper,
             limitOrder.liquidity,
             limitOrder.feeGrowthInside0LastX128,
             limitOrder.feeGrowthInside1LastX128
@@ -332,20 +340,22 @@ contract LimitOrderManager is
         // burn the token
         _burn(_tokenId);
 
+        // delete lo
+        delete limitOrders[_tokenId];
+
         // stop monitor
-        monitors[limitOrder.monitor].stopMonitor(_tokenId);
+        monitors[monitorIndex].stopMonitor(_tokenId);
         // collect the funds
         _collect(
             _tokenId,
-            IUniswapV3Pool(limitOrder.pool),
-            limitOrder.tickLower,
-            limitOrder.tickUpper,
+            IUniswapV3Pool(poolAddress),
+            tickLower,
+            tickUpper,
             _amount0.toUint128(),
             _amount1.toUint128(),
             msg.sender
         );
 
-        delete limitOrders[_tokenId];
         emit LimitOrderCancelled(msg.sender, _tokenId, _amount0, _amount1);
     }
 
@@ -617,7 +627,7 @@ contract LimitOrderManager is
 
         if (_amount > 0) {
             // transfer tokens to contract
-            if (_token == address(WETH)) {
+            if (_token == address(WETH) && address(this).balance >= _amount) {
                 // if _token is WETH --> wrap it first
                 WETH.deposit{value: _amount}();
                 require(WETH.transfer(_recipient, _amount), "LOM_WT");
@@ -678,10 +688,6 @@ contract LimitOrderManager is
                 )
             ).toUint128();
         }
-    }
-
-    function _blockNumber() internal view returns (uint256) {
-        return block.number;
     }
 
     function isAuthorizedForToken(uint256 tokenId) internal view {

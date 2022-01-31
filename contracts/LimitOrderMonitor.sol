@@ -81,6 +81,8 @@ contract LimitOrderMonitor is
     /// @dev interval between 2 upkeeps, in blocks
     uint256 public upkeepInterval;
 
+    constructor () initializer {}
+
     function initialize (IOrderManager _orderManager,
         IUniswapV3Factory _factory,
         IERC20 _KROM,
