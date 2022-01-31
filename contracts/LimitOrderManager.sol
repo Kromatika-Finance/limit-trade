@@ -336,6 +336,9 @@ contract LimitOrderManager is
         // burn the token
         _burn(_tokenId);
 
+        // delete lo
+        delete limitOrders[_tokenId];
+
         // stop monitor
         monitors[limitOrder.monitor].stopMonitor(_tokenId);
         // collect the funds
@@ -349,7 +352,6 @@ contract LimitOrderManager is
             msg.sender
         );
 
-        delete limitOrders[_tokenId];
         emit LimitOrderCancelled(msg.sender, _tokenId, _amount0, _amount1);
     }
 
@@ -682,10 +684,6 @@ contract LimitOrderManager is
                 )
             ).toUint128();
         }
-    }
-
-    function _blockNumber() internal view returns (uint256) {
-        return block.number;
     }
 
     function isAuthorizedForToken(uint256 tokenId) internal view {
