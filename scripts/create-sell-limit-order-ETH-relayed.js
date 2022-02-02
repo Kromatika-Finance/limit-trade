@@ -23,7 +23,7 @@ module.exports = async(callback) => {
 
         // kovan addresses
         // const token0 = "0x4F96Fe3b7A6Cf9725f59d353F723c1bDb64CA6Aa"; // DAI
-        let token1 = "0xa2A3D56fe58B0C42ED421CeC3355AC40184775c9"; // KROM on Ar
+        let token1 = "0xa51203Fb617313B504b0bB9b6065E5296903AF9b"; // KROM on Ar
 
         let token0Instance = await ERC20.at(token0);
         let token1Instance = await ERC20.at(token1);
@@ -37,7 +37,7 @@ module.exports = async(callback) => {
         const fee = 3000;
 
         // // target price: 1 ETH = 3800 DAI --> sell ETH for DAI MAINNET
-        let sellTokenPrice = "97000"; // token1 price of token0
+        let sellTokenPrice = "97600"; // token1 price of token0
 
         let targetGasPrice = web3.utils.toWei("10000", "wei");
 
@@ -54,6 +54,7 @@ module.exports = async(callback) => {
             JSBI.BigInt(sellTokenPrice * 10 ** token1Decimals),
             JSBI.BigInt(1 * 10 ** token0Decimals));
 
+
         const tradeInstance = await LimitOrderManager.deployed();
 
         [token0, token1, amount0, amount1, sellTokenPrice] = sortTokens(token0, token1, amount0, amount1, sellTokenPrice);
@@ -61,9 +62,25 @@ module.exports = async(callback) => {
         let msgValue = 0;
         if (token0 == process.env.WETH && amount0 > 0) {
             msgValue = amount0.add(new BN(msgValue.toString()))
+
+            await token0Instance.approve(
+                tradeInstance.address,
+                amount0,
+                {from: currentAccount}
+            );
+
+            console.log((await token0Instance.allowance(currentAccount, tradeInstance.address)).toString());
         }
         if (token1 == process.env.WETH && amount1 > 0) {
             msgValue = amount1.add(new BN(msgValue.toString()))
+
+            await token1Instance.approve(
+                tradeInstance.address,
+                amount1,
+                {from: currentAccount}
+            );
+
+            console.log((await token1Instance.allowance(currentAccount, tradeInstance.address)).toString());
         }
 
         console.log("Token0 --> " + token0.toString());
@@ -74,24 +91,6 @@ module.exports = async(callback) => {
         console.log("Amount1 --> " + amount1.toString());
 
         targetSqrtPriceX96 = new BN(targetSqrtPriceX96.toString());
-
-        // sign the message
-
-        const hashKey = web3.utils.soliditySha3(
-                {t: 'address', v: token0},
-                {t: 'address', v: token1},
-                {t: 'uint24', v: fee},
-                {t: 'uint160', v: targetSqrtPriceX96},
-                {t: 'uint128', v: amount0},
-                {t: 'uint128', v: amount1},
-                {t: 'address', v: currentAccount}
-            );
-
-        let signature = await web3.eth.sign(hashKey, currentAccount);
-        // signature = signature.substr(0, 130) + (signature.substr(130) == "00" ? "1b" : "1c"); // v: 0,1 => 27,28
-
-        console.log('HASH:' + hashKey);
-        console.log("SIG:" + signature);
 
         // encode function call
         const calldata = web3.eth.abi.encodeFunctionCall(
@@ -130,27 +129,22 @@ module.exports = async(callback) => {
                                 "type": "uint128"
                             },
                             {
-                                "internalType": "bool",
-                                "name": "native",
-                                "type": "bool"
+                                "internalType": "uint256",
+                                "name": "_amount0Min",
+                                "type": "uint256"
+                            },
+                            {
+                                "internalType": "uint256",
+                                "name": "_amount1Min",
+                                "type": "uint256"
                             }
                         ],
                         "internalType": "struct IOrderManager.LimitOrderParams",
                         "name": "params",
                         "type": "tuple"
-                    },
-                    {
-                        "internalType": "address",
-                        "name": "_owner",
-                        "type": "address"
-                    },
-                    {
-                        "internalType": "bytes",
-                        "name": "signature",
-                        "type": "bytes"
                     }
                 ],
-                "name": "placeLimitOrderRelayed",
+                "name": "placeLimitOrder",
                 "outputs": [
                     {
                         "internalType": "uint256",
@@ -162,7 +156,7 @@ module.exports = async(callback) => {
                 "type": "function",
                 "payable": true
             }
-        , [[token0, token1, fee, targetSqrtPriceX96.toString(), amount0.toString(), amount1.toString(), false], currentAccount, signature])
+        , [[token0, token1, fee, targetSqrtPriceX96.toString(), amount0.toString(), amount1.toString(), 0, 0]])
 
         const calldatas = [];
         calldatas.push(calldata);
@@ -170,7 +164,24 @@ module.exports = async(callback) => {
         console.log('CALLDATA: ' + calldata);
         console.log(msgValue.toString());
 
-        const receipt = await tradeInstance.multicall(calldatas, {from: currentAccount});
+        const nonce = await web3.eth.getTransactionCount(currentAccount, 'pending');
+
+        // sign calldata
+        // const hashKey = web3.utils.soliditySha3(
+        //     {t: 'bytes[]', v: calldatas},
+        //     {t: 'address', v: currentAccount},
+        //     {t: 'uint256', v: nonce}
+        // );
+
+        const hashKey = web3.utils.keccak256(web3.eth.abi.encodeParameters(['bytes[]','address', 'uint256'], [calldatas, currentAccount, nonce]));
+
+        let signature = await web3.eth.sign(hashKey, currentAccount);
+        // signature = signature.substr(0, 130) + (signature.substr(130) == "00" ? "1b" : "1c"); // v: 0,1 => 27,28
+
+        console.log('HASH:' + hashKey);
+        console.log("SIG:" + signature);
+
+        const receipt = await tradeInstance.relayedCall(calldatas, signature, currentAccount, nonce, {from: currentAccount});
         console.log('receipt:', receipt);
 
     } catch (error) {
@@ -179,7 +190,7 @@ module.exports = async(callback) => {
     callback();
 
     function sortTokens(token0, token1, amount0, amount1, tokenPrice) {
-        if (token0 < token1) {
+        if (token0.toLowerCase() < token1.toLowerCase()) {
             return [token0, token1, amount0, amount1, tokenPrice];
         } else {
             // inverse

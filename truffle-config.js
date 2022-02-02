@@ -150,7 +150,7 @@ module.exports = {
                 // See the solidity docs for advice about optimization and evmVersion
                 optimizer: {
                     enabled: true,
-                    runs: 2000,
+                    runs: 200,
                 },
                 // evmVersion: "byzantium"
             },
@@ -171,6 +171,7 @@ module.exports = {
         'truffle-contract-size'
     ],
     api_keys: {
-        etherscan: process.env.ETHERSCAN_API_KEY
+        etherscan: process.env.ETHERSCAN_API_KEY,
+        arbiscan: process.env.ETHERSCAN_API_KEY
     }
 }

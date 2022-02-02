@@ -6,12 +6,14 @@ pragma abicoder v2;
 import "@openzeppelin/contracts/math/SafeMath.sol";
 import "@openzeppelin/contracts/utils/SafeCast.sol";
 import '@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol';
+import "@openzeppelin/contracts/cryptography/ECDSA.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-periphery/contracts/libraries/PoolAddress.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "@uniswap/v3-core/contracts/interfaces/callback/IUniswapV3MintCallback.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/IMulticall.sol";
 import '@uniswap/v3-core/contracts/libraries/FixedPoint128.sol';
 import '@uniswap/v3-core/contracts/libraries/FullMath.sol';
 import "@uniswap/v3-periphery/contracts/libraries/PositionKey.sol";
@@ -24,7 +26,6 @@ import "./interfaces/IOrderManager.sol";
 import "./interfaces/IUniswapUtils.sol";
 
 import "./SelfPermit.sol";
-import "./Multicall.sol";
 import "./WETHExtended.sol";
 
 /// @title  LimitOrderManager
@@ -32,7 +33,7 @@ contract LimitOrderManager is
     IOrderManager,
     ERC721Upgradeable,
     IUniswapV3MintCallback,
-    Multicall,
+    IMulticall,
     SelfPermit {
 
     using SafeMath for uint256;
@@ -181,6 +182,45 @@ contract LimitOrderManager is
         emit GasUsageMonitorChanged(msg.sender, _gasUsageMonitor);
         emit ProtocolFeeChanged(msg.sender, _protocolFee);
         emit ProtocolAddressChanged(msg.sender, _feeAddress);
+    }
+
+    /// @inheritdoc IMulticall
+    function multicall(bytes[] calldata data) public payable override returns (bytes[] memory results) {
+        results = new bytes[](data.length);
+        for (uint256 i = 0; i < data.length; i++) {
+            (bool success, bytes memory result) = address(this).delegatecall(data[i]);
+
+            if (!success) {
+                // Next 5 lines from https://ethereum.stackexchange.com/a/83577
+                if (result.length < 68) revert();
+                assembly {
+                    result := add(result, 0x04)
+                }
+                revert(abi.decode(result, (string)));
+            }
+
+            results[i] = result;
+        }
+    }
+
+    function relayedCall(bytes[] calldata data,
+        bytes calldata signature,
+        address _owner,
+        uint256 _nonce) public payable returns (bytes[] memory results) {
+
+        // TODO set min KROM deposit threshold for gasless transactions;
+        uint256 _gasUsed = gasleft();
+
+        // verify signature
+        bytes32 dataHash = keccak256(abi.encode(data, _owner, _nonce));
+        _checkSignature(dataHash, _owner, signature);
+        // TODO save nonce
+
+        // do the call
+        results = multicall(data);
+
+        _gasUsed = _gasUsed - gasleft();
+        _chargeRelayerFee(_gasUsed, tx.gasprice, _owner, msg.sender);
     }
 
     function placeLimitOrder(LimitOrderParams calldata params)
@@ -699,6 +739,42 @@ contract LimitOrderManager is
 
             return result;
         }
+    }
+
+    /// @notice Check that ESDSA signature request is signed correctly by the owner
+    function _checkSignature(bytes32 dataHash, address _owner, bytes memory _signature) internal pure {
+
+        address recoveredAddress = ECDSA.recover(
+            ECDSA.toEthSignedMessageHash(dataHash),
+            _signature
+        );
+
+        // Verify that the message's signer is the owner of the orderignature);
+        require(recoveredAddress == _owner, "LOM_RE");
+    }
+
+
+    function _chargeRelayerFee(
+        uint256 _gasUsed,
+        uint256 _txPrice,
+        address _owner,
+        address _to
+    ) internal {
+
+        uint256 _relayerFee = quoteKROM(_gasUsed.mul(_txPrice));
+
+        _relayerFee = _relayerFee
+        .mul(PROTOCOL_FEE_MULTIPLIER.add(protocolFee))
+        .div(PROTOCOL_FEE_MULTIPLIER);
+
+        // check if enough balance
+        uint256 balance = funding[_owner];
+        // reduce balance by the _relayerFee
+        balance = balance.sub(_relayerFee);
+        funding[_owner] = balance;
+
+        // send fees to relayer
+        _transferTokenTo(address(KROM), _relayerFee, _to);
     }
 
     function _removeLiquidity(
