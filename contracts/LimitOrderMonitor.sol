@@ -192,7 +192,7 @@ contract LimitOrderMonitor is
             require(_count <= batchSize, "LOC_BS");
             for (uint256 i = 0; i < _count; i++) {
                 _tokenId = _tokenIds[i];
-                (validTrade, _serviceFee, _monitorFee) = orderManager.canProcess(_tokenId, tx.gasprice);
+                (validTrade, _serviceFee, _monitorFee) = orderManager.canProcess(_tokenId, _getGasPrice(tx.gasprice));
                 if (validTrade) {
                     validCount++;
                     _stopMonitor(_tokenId);

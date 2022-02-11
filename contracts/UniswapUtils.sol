@@ -25,7 +25,7 @@ contract UniswapUtils is IUniswapUtils, Initializable {
 
     address public controller;
 
-    uint32 public twapPeriod;
+    uint32 public TWAP_PERIOD;
 
     /// @dev when controller has changed
     event ControllerChanged(address from, address newValue);
@@ -37,7 +37,7 @@ contract UniswapUtils is IUniswapUtils, Initializable {
 
     function initialize() public initializer {
         controller = msg.sender;
-        twapPeriod = 1800;
+        TWAP_PERIOD = 1800;
     }
 
     function calculateLimitTicks(
@@ -80,7 +80,7 @@ contract UniswapUtils is IUniswapUtils, Initializable {
         require(_poolAddress != address(0), "UUC_PA");
 
         if (_weiAmount > 0) {
-            int24 arithmeticMeanTick = _getMeanTickTwap(_poolAddress, twapPeriod);
+            int24 arithmeticMeanTick = _getMeanTickTwap(_poolAddress, TWAP_PERIOD);
             quote = OracleLibrary.getQuoteAtTick(
                 arithmeticMeanTick,
                 _weiAmount.toUint128(),
@@ -121,7 +121,7 @@ contract UniswapUtils is IUniswapUtils, Initializable {
     function changeTwapPeriod(uint32 _twapPeriod) external {
 
         isAuthorizedController();
-        twapPeriod = _twapPeriod;
+        TWAP_PERIOD = _twapPeriod;
         emit TwapPeriodChanged(msg.sender, _twapPeriod);
     }
 
