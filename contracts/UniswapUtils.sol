@@ -25,7 +25,7 @@ contract UniswapUtils is IUniswapUtils, Initializable {
 
     address public controller;
 
-    uint32 public twapPeriod;
+    uint32 public TWAP_PERIOD;
 
     /// @dev when controller has changed
     event ControllerChanged(address from, address newValue);
@@ -37,7 +37,7 @@ contract UniswapUtils is IUniswapUtils, Initializable {
 
     function initialize() public initializer {
         controller = msg.sender;
-        twapPeriod = 1800;
+        TWAP_PERIOD = 1800;
     }
 
     function calculateLimitTicks(
@@ -80,13 +80,34 @@ contract UniswapUtils is IUniswapUtils, Initializable {
         require(_poolAddress != address(0), "UUC_PA");
 
         if (_weiAmount > 0) {
-            (int24 arithmeticMeanTick,) = OracleLibrary.consult(_poolAddress, twapPeriod);
+            int24 arithmeticMeanTick = _getMeanTickTwap(_poolAddress, TWAP_PERIOD);
             quote = OracleLibrary.getQuoteAtTick(
                 arithmeticMeanTick,
                 _weiAmount.toUint128(),
                 WETH,
                 KROM
             );
+        }
+    }
+
+    function _getMeanTickTwap(address _poolAddress, uint32 twapInterval) internal view returns (
+        int24 arithmeticMeanTick
+    ) {
+
+        if (twapInterval == 0) {
+            // return the current price if twapInterval == 0
+            (,arithmeticMeanTick, , , , , ) = IUniswapV3Pool(_poolAddress).slot0();
+        } else {
+            uint32[] memory secondsAgos = new uint32[](2);
+            secondsAgos[0] = twapInterval;
+            secondsAgos[1] = 0;
+
+            (int56[] memory tickCumulatives,) = IUniswapV3Pool(_poolAddress).observe(secondsAgos);
+
+            int56 tickCumulativesDelta = tickCumulatives[1] - tickCumulatives[0];
+            arithmeticMeanTick = int24(tickCumulativesDelta / twapInterval);
+            // Always round to negative infinity
+            if (tickCumulativesDelta < 0 && (tickCumulativesDelta % twapInterval != 0)) arithmeticMeanTick--;
         }
     }
 
@@ -100,7 +121,7 @@ contract UniswapUtils is IUniswapUtils, Initializable {
     function changeTwapPeriod(uint32 _twapPeriod) external {
 
         isAuthorizedController();
-        twapPeriod = _twapPeriod;
+        TWAP_PERIOD = _twapPeriod;
         emit TwapPeriodChanged(msg.sender, _twapPeriod);
     }
 
@@ -123,10 +144,6 @@ contract UniswapUtils is IUniswapUtils, Initializable {
         } else {
             (_lowerTick, _upperTick, _liquidity, _orderType) = (_askLower, _askUpper, askLiquidity, uint128(2));
         }
-    }
-
-    function isAuthorizedController() internal view {
-        require(msg.sender == controller, "UUC_AC");
     }
 
     /// @dev Wrapper around `LiquidityAmounts.getLiquidityForAmounts()`.
@@ -171,6 +188,10 @@ contract UniswapUtils is IUniswapUtils, Initializable {
         require(_tickUpper <= TickMath.MAX_TICK, "UUC_TAMAX");
         require(_tickLower % _tickSpacing == 0, "UUC_TLS");
         require(_tickUpper % _tickSpacing == 0, "UUC_TUS");
+    }
+
+    function isAuthorizedController() internal view {
+        require(msg.sender == controller, "UUC_AC");
     }
 
     /// @dev Rounds tick down towards negative infinity so that it's a multiple

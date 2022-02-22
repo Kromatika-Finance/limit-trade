@@ -15,7 +15,7 @@ module.exports = async function (deployer, network, accounts) {
   // monitorFee = 20 % (this needs to be in a global config); the same % should be applied in the estimation
   await deployProxy(LimitOrderMonitor,
       [limitOrderManagerInstance.address, uniswapFactory, kromatikaInstance.address,
-          accounts[0], 10, 300, fastGasFeed],
+          accounts[0], 10, 300, 1, fastGasFeed],
       {deployer, unsafeAllow: ['constructor']});
 
   const limitOrderMonitorInstance = await LimitOrderMonitor.deployed()

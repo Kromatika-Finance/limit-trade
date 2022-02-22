@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/Initializable.sol";
 
 import "@chainlink/contracts/src/v0.7/interfaces/KeeperCompatibleInterface.sol";
 import "@chainlink/contracts/src/v0.7/interfaces/AggregatorV3Interface.sol";
+import "@chainlink/contracts/src/v0.7/KeeperBase.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
@@ -19,7 +20,8 @@ import "./interfaces/IOrderManager.sol";
 contract LimitOrderMonitor is
     Initializable,
     IOrderMonitor,
-    KeeperCompatibleInterface {
+    KeeperCompatibleInterface,
+    KeeperBase {
 
     using SafeMath for uint256;
 
@@ -72,11 +74,14 @@ contract LimitOrderMonitor is
     /// @dev krom token
     IERC20 public KROM;
 
+    /// @dev last upkeep block
+    uint256 public lastUpkeep;
+
     /// @dev max batch size
     uint256 public batchSize;
 
     /// @dev max monitor size
-    uint256 public monitorSize;
+    uint256 public override monitorSize;
 
     /// @dev interval between 2 upkeeps, in blocks
     uint256 public upkeepInterval;
@@ -88,7 +93,8 @@ contract LimitOrderMonitor is
         IERC20 _KROM,
         address _keeper,
         uint256 _batchSize,
-        uint256 _monitorSize) public initializer {
+        uint256 _monitorSize,
+        uint256 _upkeepInterval) public initializer {
 
         require(_batchSize <= MAX_BATCH_SIZE, "INVALID_BATCH_SIZE");
         require(_monitorSize <= MAX_MONITOR_SIZE, "INVALID_MONITOR_SIZE");
@@ -100,6 +106,7 @@ contract LimitOrderMonitor is
 
         batchSize = _batchSize;
         monitorSize = _monitorSize;
+        upkeepInterval = _upkeepInterval;
 
         controller = msg.sender;
         keeper = _keeper;
@@ -127,35 +134,37 @@ contract LimitOrderMonitor is
     function checkUpkeep(
         bytes calldata
     )
-    external override
+    external override cannotExecute
     returns (
         bool upkeepNeeded,
         bytes memory performData
     ) {
 
-        uint256 _tokenId;
-        uint256[] memory batchTokenIds = new uint256[](batchSize);
-        uint256 count;
+        if (upkeepNeeded = (_getBlockNumber() - lastUpkeep) > upkeepInterval) {
+            uint256 _tokenId;
+            uint256[] memory batchTokenIds = new uint256[](batchSize);
+            uint256 count;
 
-        // iterate through all active tokens;
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            _tokenId = tokenIds[i];
-            (upkeepNeeded,,) = orderManager.canProcess(
-                _tokenId,
-                _getGasPrice(tx.gasprice)
-            );
+            // iterate through all active tokens;
+            for (uint256 i = 0; i < tokenIds.length; i++) {
+                _tokenId = tokenIds[i];
+                (upkeepNeeded,,) = orderManager.canProcess(
+                    _tokenId,
+                    _getGasPrice(tx.gasprice)
+                );
+                if (upkeepNeeded) {
+                    batchTokenIds[count] = _tokenId;
+                    count++;
+                }
+                if (count >= batchSize) {
+                    break;
+                }
+            }
+
+            upkeepNeeded = count > 0;
             if (upkeepNeeded) {
-                batchTokenIds[count] = _tokenId;
-                count++;
+                performData = abi.encode(batchTokenIds, count);
             }
-            if (count >= batchSize) {
-                break;
-            }
-        }
-
-        upkeepNeeded = count > 0;
-        if (upkeepNeeded) {
-            performData = abi.encode(batchTokenIds, count);
         }
     }
 
@@ -183,7 +192,7 @@ contract LimitOrderMonitor is
             require(_count <= batchSize, "LOC_BS");
             for (uint256 i = 0; i < _count; i++) {
                 _tokenId = _tokenIds[i];
-                (validTrade, _serviceFee, _monitorFee) = orderManager.canProcess(_tokenId, tx.gasprice);
+                (validTrade, _serviceFee, _monitorFee) = orderManager.canProcess(_tokenId, _getGasPrice(tx.gasprice));
                 if (validTrade) {
                     validCount++;
                     _stopMonitor(_tokenId);
@@ -199,6 +208,8 @@ contract LimitOrderMonitor is
         require(validCount > 0, "LOC_VC");
 
         _gasUsed = _gasUsed - gasleft();
+        lastUpkeep = _getBlockNumber();
+
         // send the paymentPaid to the keeper
         _transferFees(monitorFeePaid, keeper);
         // send the diff to the fee address
@@ -274,10 +285,20 @@ contract LimitOrderMonitor is
         gasPrice = _txnGasPrice > 0 ? _txnGasPrice : 0;
     }
 
+    // TODO (override block numbers for L2)
+    function _getBlockNumber() internal virtual view
+    returns (uint256 blockNumber) {
+        blockNumber = block.number;
+    }
+
     function _transferFees(uint256 _amount, address _owner) internal virtual {
         if (_amount > 0) {
             TransferHelper.safeTransfer(address(KROM), _owner, _amount);
         }
+    }
+
+    function getTokenIdsLength() external view override returns (uint256) {
+        return tokenIds.length;
     }
 
     function isAuthorizedController() internal view {

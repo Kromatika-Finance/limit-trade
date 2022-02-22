@@ -20,11 +20,12 @@ contract LimitOrderMonitorChainlink is LimitOrderMonitor {
         address _keeper,
         uint256 _batchSize,
         uint256 _monitorSize,
+        uint256 _upkeepInterval,
         AggregatorV3Interface fastGasFeed) public initializer {
 
         super.initialize(
             _orderManager, _factory, _KROM, _keeper,
-                _batchSize, _monitorSize
+                _batchSize, _monitorSize, _upkeepInterval
         );
 
         FAST_GAS_FEED = fastGasFeed;
