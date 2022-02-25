@@ -86,6 +86,9 @@ contract LimitOrderMonitor is
     /// @dev interval between 2 upkeeps, in blocks
     uint256 public upkeepInterval;
 
+    /// @dev monitor token offset
+    uint256 public monitorOffset;
+
     constructor () initializer {}
 
     function initialize (IOrderManager _orderManager,
@@ -113,23 +116,6 @@ contract LimitOrderMonitor is
 
         require(KROM.approve(address(orderManager), MAX_INT));
     }
-    
-    function startMonitor(uint256 _tokenId) external override {
-
-        isAuthorizedTradeManager(); 
-        require(tokenIds.length < monitorSize, "MONITOR_FULL");
-        tokenIds.push(_tokenId);
-        tokenIndexPerTokenId[_tokenId] = tokenIds.length;
-
-        emit MonitorStarted(_tokenId);
-    }
-
-    function stopMonitor(uint256 _tokenId) external override {
-        
-        isAuthorizedTradeManager();
-        _stopMonitor(_tokenId);
-        emit MonitorStopped(_tokenId);
-    }
 
     function checkUpkeep(
         bytes calldata
@@ -141,19 +127,20 @@ contract LimitOrderMonitor is
     ) {
 
         if (upkeepNeeded = (_getBlockNumber() - lastUpkeep) > upkeepInterval) {
-            uint256 _tokenId;
             uint256[] memory batchTokenIds = new uint256[](batchSize);
             uint256 count;
 
-            // iterate through all active tokens;
-            for (uint256 i = 0; i < tokenIds.length; i++) {
-                _tokenId = tokenIds[i];
+            uint256 tokenSize = orderManager.getTokenIdsLength();
+            uint256 tokenPagination = monitorOffset + monitorSize;
+            tokenSize = tokenPagination > tokenSize ? tokenSize : tokenPagination;
+
+            for (uint256 i = monitorOffset; i < tokenSize; i++) {
                 (upkeepNeeded,,) = orderManager.canProcess(
-                    _tokenId,
+                    i,
                     _getGasPrice(tx.gasprice)
                 );
                 if (upkeepNeeded) {
-                    batchTokenIds[count] = _tokenId;
+                    batchTokenIds[count] = i;
                     count++;
                 }
                 if (count >= batchSize) {
@@ -172,48 +159,46 @@ contract LimitOrderMonitor is
         bytes calldata performData
     ) external override {
 
-        uint256 _gasUsed = gasleft();
+        require((_getBlockNumber() - lastUpkeep) > upkeepInterval, "LOC_UP");
 
+        uint256 _gasUsed = gasleft();
         (uint256[] memory _tokenIds, uint256 _count) = abi.decode(
             performData, (uint256[], uint256)
         );
 
         uint256 serviceFeePaid;
-        uint256 monitorFeePaid;
         uint256 validCount;
 
         {
-            bool validTrade;
-            uint256 _serviceFee;
-            uint256 _monitorFee;
             uint256 _tokenId;
 
             require(_count <= _tokenIds.length, "LOC_CL");
             require(_count <= batchSize, "LOC_BS");
             for (uint256 i = 0; i < _count; i++) {
                 _tokenId = _tokenIds[i];
-                (validTrade, _serviceFee, _monitorFee) = orderManager.canProcess(_tokenId, _getGasPrice(tx.gasprice));
-                if (validTrade) {
-                    validCount++;
-                    _stopMonitor(_tokenId);
-                    orderManager.processLimitOrder(
-                        _tokenId, _serviceFee, _monitorFee
+
+                (bool success, bytes memory data) = address(orderManager).call(
+                    abi.encodeWithSignature("processLimitOrder(uint256)", _tokenId)
+                );
+
+                if (success) {
+                    // parse the options;
+                    (bool validTrade, uint256 _serviceFee) = abi.decode(
+                        data, (bool, uint256)
                     );
-                    serviceFeePaid = serviceFeePaid.add(_serviceFee);
-                    monitorFeePaid = monitorFeePaid.add(_monitorFee);
+                    if (validTrade) {
+                        validCount++;
+                        serviceFeePaid += _serviceFee;
+                    }
                 }
             }
         }
 
-        require(validCount > 0, "LOC_VC");
+        // FIX when simulating with gasPrice=0; ignore the valid count
+        require(tx.gasprice == 0 || validCount > 0, "LOC_VC");
 
         _gasUsed = _gasUsed - gasleft();
         lastUpkeep = _getBlockNumber();
-
-        // send the paymentPaid to the keeper
-        _transferFees(monitorFeePaid, keeper);
-        // send the diff to the fee address
-        _transferFees(serviceFeePaid.sub(monitorFeePaid), orderManager.feeAddress());
 
         emit BatchProcessed(
             validCount,
@@ -248,6 +233,12 @@ contract LimitOrderMonitor is
         isAuthorizedController();
         upkeepInterval = _upkeepInterval;
         emit UpkeepIntervalChanged(msg.sender, _upkeepInterval);
+    }
+
+    function setMonitorOffset(uint256 _monitorOffset) external  {
+
+        isAuthorizedController();
+        monitorOffset = _monitorOffset;
     }
 
     function changeController(address _controller) external {
