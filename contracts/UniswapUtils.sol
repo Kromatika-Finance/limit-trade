@@ -44,7 +44,8 @@ contract UniswapUtils is IUniswapUtils, Initializable {
         IUniswapV3Pool _pool,
         uint160 _sqrtPriceX96,
         uint256 _amount0,
-        uint256 _amount1
+        uint256 _amount1,
+        int24 _tickMultiplier
     ) external override view
     returns (
         int24 _lowerTick,
@@ -61,10 +62,10 @@ contract UniswapUtils is IUniswapUtils, Initializable {
         int24 tickFloor = _floor(_targetTick, tickSpacing);
 
         return _checkLiquidityRange(
-            tickFloor - tickSpacing,
+            tickFloor - (_tickMultiplier * tickSpacing),
             tickFloor,
             tickFloor,
-            tickFloor + tickSpacing,
+            tickFloor + (_tickMultiplier * tickSpacing),
             _amount0,
             _amount1,
             sqrtRatioX96,
