@@ -172,6 +172,8 @@ contract LimitOrderMonitor is
         bytes calldata performData
     ) external override {
 
+        require((_getBlockNumber() - lastUpkeep) > upkeepInterval, "LOC_UL");
+
         uint256 _gasUsed = gasleft();
 
         (uint256[] memory _tokenIds, uint256 _count) = abi.decode(
