@@ -190,10 +190,7 @@ contract LimitOrderManager is
 
         require(params._token0 < params._token1, "LOM_TE");
 
-        int24 _tickLower;
-        int24 _tickUpper;
         uint128 _liquidity;
-        uint128 _orderType;
         IUniswapV3Pool _pool;
 
         PoolAddress.PoolKey memory _poolKey =
@@ -203,22 +200,28 @@ contract LimitOrderManager is
             fee: params._fee
         });
 
-        address _poolAddress = PoolAddress.computeAddress(address(factory), _poolKey);
-        require (_poolAddress != address(0), "LOM_PA");
-        _pool = IUniswapV3Pool(_poolAddress);
+        {
+            address _poolAddress = PoolAddress.computeAddress(address(factory), _poolKey);
+            require (_poolAddress != address(0), "LOM_PA");
+            _pool = IUniswapV3Pool(_poolAddress);
 
-        (_tickLower, _tickUpper, _liquidity, _orderType) = utils.calculateLimitTicks(
-            _pool,
-            params._sqrtPriceX96,
-            params._amount0,
-            params._amount1
-        );
+            (uint160 sqrtRatioX96,, , , , , ) = _pool.slot0();
+            _liquidity = LiquidityAmounts.getLiquidityForAmounts(
+                sqrtRatioX96,
+                TickMath.getSqrtRatioAtTick(params._tickLower),
+                TickMath.getSqrtRatioAtTick(params._tickUpper),
+                params._amount0,
+                params._amount1
+            );
+
+            require (_liquidity > 0, "LOM_NL");
+        }
 
         {
             (uint256 _amount0, uint256 _amount1) = _pool.mint(
                 address(this),
-                _tickLower,
-                _tickUpper,
+                params._tickLower,
+                params._tickUpper,
                 _liquidity,
                 abi.encode(MintCallbackData({poolKey: _poolKey, payer: msg.sender}))
             );
@@ -227,20 +230,16 @@ contract LimitOrderManager is
             _mint(msg.sender, (_tokenId = nextId++));
 
             activeOrders[msg.sender] = activeOrders[msg.sender].add(1);
-            uint32 _selectedIndex = _selectMonitor();
-            if (nextMonitor != _selectedIndex) {
-                nextMonitor = _selectedIndex;
-            }
 
             (, uint256 _feeGrowthInside0LastX128, uint256 _feeGrowthInside1LastX128, , ) = _pool.positions(
-                PositionKey.compute(address(this), _tickLower, _tickUpper)
+                PositionKey.compute(address(this), params._tickLower, params._tickUpper)
             );
 
             limitOrders[_tokenId] = LimitOrder({
                 pool: address(_pool),
-                monitor: _selectedIndex,
-                tickLower: _tickLower,
-                tickUpper: _tickUpper,
+                monitor: 0,
+                tickLower: params._tickLower,
+                tickUpper: params._tickUpper,
                 liquidity: _liquidity,
                 processed: false,
                 feeGrowthInside0LastX128: _feeGrowthInside0LastX128,
@@ -248,14 +247,12 @@ contract LimitOrderManager is
                 tokensOwed0: _amount0.toUint128(),
                 tokensOwed1: _amount1.toUint128()
             });
-
-            monitors[_selectedIndex].startMonitor(_tokenId);
         }
 
         emit LimitOrderCreated(
             msg.sender,
             _tokenId,
-            _orderType,
+            0,
             params._sqrtPriceX96,
             params._amount0,
             params._amount1
@@ -263,18 +260,21 @@ contract LimitOrderManager is
     }
 
     function processLimitOrder(
-        uint256 _tokenId,
-        uint256 _serviceFeePaid,
-        uint256
+        uint256 _tokenId
     ) external override
-        returns (uint128 _amount0, uint128 _amount1) {
+        returns (bool, uint256) {
+
+        // TODO (optimize this)
+        (bool validTrade, uint256 _serviceFee, uint256 _monitorFee) = canProcess(_tokenId, tx.gasprice);
+        if (!validTrade) {
+            return (false, 0);
+        }
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
-        require(msg.sender == address(monitors[limitOrder.monitor]), "LOM_LM");
         require(!limitOrder.processed, "LOM_PR");
 
-        // remove liqudiity
-        (_amount0, _amount1) = _removeLiquidity(
+        // remove liquidity
+        (uint128 _amount0, uint128 _amount1) = _removeLiquidity(
             IUniswapV3Pool(limitOrder.pool),
             limitOrder.tickLower,
             limitOrder.tickUpper,
@@ -285,15 +285,13 @@ contract LimitOrderManager is
 
         limitOrder.liquidity = 0;
         limitOrder.processed = true;
-        limitOrder.tokensOwed0 = _amount0;
-        limitOrder.tokensOwed1 = _amount1;
 
         address _owner = ownerOf(_tokenId);
 
         // update balance
         uint256 balance = funding[_owner];
         // reduce balance by the service fee
-        balance = balance.sub(_serviceFeePaid);
+        balance = balance.sub(_serviceFee);
         funding[_owner] = balance;
 
         // reduce activeOrders
@@ -305,15 +303,19 @@ contract LimitOrderManager is
             IUniswapV3Pool(limitOrder.pool),
             limitOrder.tickLower,
             limitOrder.tickUpper,
-            limitOrder.tokensOwed0,
-            limitOrder.tokensOwed1,
+            _amount0,
+            _amount1,
             _owner
         );
 
+        uint256 fees = _serviceFee.sub(_monitorFee);
         // send fees to monitor and protocol
-        _transferTokenTo(address(KROM), _serviceFeePaid, msg.sender);
+        _transferTokenTo(address(KROM), _monitorFee, msg.sender);
+        _transferTokenTo(address(KROM), fees, feeAddress);
 
-        emit LimitOrderProcessed(msg.sender, _tokenId, _serviceFeePaid);
+        emit LimitOrderProcessed(msg.sender, _tokenId, _serviceFee);
+
+        return (true, _monitorFee);
     }
 
 
@@ -326,7 +328,6 @@ contract LimitOrderManager is
         LimitOrder storage limitOrder = limitOrders[_tokenId];
         require(!limitOrder.processed, "LOM_PR");
         address poolAddress = limitOrder.pool;
-        uint32 monitorIndex = limitOrder.monitor;
         int24 tickLower = limitOrder.tickLower;
         int24 tickUpper = limitOrder.tickUpper;
 
@@ -347,8 +348,6 @@ contract LimitOrderManager is
         // delete lo
         delete limitOrders[_tokenId];
 
-        // stop monitor
-        monitors[monitorIndex].stopMonitor(_tokenId);
         // collect the funds
         _collect(
             _tokenId,
@@ -361,16 +360,6 @@ contract LimitOrderManager is
         );
 
         emit LimitOrderCancelled(msg.sender, _tokenId, _amount0, _amount1);
-    }
-
-    function burn(uint256 _tokenId) external {
-
-        isAuthorizedForToken(_tokenId);
-        // remove information related to tokenId
-        require(limitOrders[_tokenId].processed, "LOM_PR");
-
-        delete limitOrders[_tokenId];
-        _burn(_tokenId);
     }
 
     function addFunding(uint256 _amount) external {
@@ -419,7 +408,6 @@ contract LimitOrderManager is
     )
     {
         LimitOrder memory limitOrder = limitOrders[tokenId];
-        require(limitOrder.pool != address(0), "LOM_LP");
         IUniswapV3Pool _pool = IUniswapV3Pool(limitOrder.pool);
         return (
             ownerOf(tokenId),
@@ -435,10 +423,14 @@ contract LimitOrderManager is
         );
     }
 
-    function canProcess(uint256 _tokenId, uint256 _gasPrice) external override
+    function canProcess(uint256 _tokenId, uint256 _gasPrice) public override
     returns (bool underfunded, uint256 _serviceFee, uint256 _monitorFee) {
 
         LimitOrder storage limitOrder = limitOrders[_tokenId];
+
+        if (!_exists(_tokenId) || limitOrder.pool == address(0)) {
+            return (false, 0, 0);
+        }
 
         address _owner = ownerOf(_tokenId);
         (underfunded, , _serviceFee, _monitorFee) = _isUnderfunded(_owner, _gasPrice);
@@ -508,16 +500,10 @@ contract LimitOrderManager is
         }
     }
 
-    function setMonitors(IOrderMonitor[] calldata _newMonitors) external {
-
-        isAuthorizedController();
-        require(_newMonitors.length > 0, "LOM_NM");
-        monitors = _newMonitors;
-    }
-
-    function addMonitor(IOrderMonitor _newMonitor) external {
-        isAuthorizedController();
-        monitors.push(_newMonitor);
+    function getTokenIdsLength() external view override returns(
+        uint256
+    ) {
+        return nextId;
     }
 
     function setProtocolFee(uint32 _protocolFee) external {
@@ -533,19 +519,10 @@ contract LimitOrderManager is
         emit GasUsageMonitorChanged(msg.sender, _gasUsageMonitor);
     }
 
-    function setNativeTransfer(bool _nativeTransfer) external {
-        isAuthorizedController();
-        nativeTransfer = _nativeTransfer;
-    }
-
     function changeController(address _controller) external {
         isAuthorizedController();
         controller = _controller;
         emit ControllerChanged(msg.sender, _controller);
-    }
-
-    function monitorsLength() external view returns (uint256) {
-        return monitors.length;
     }
 
     function quoteKROM(uint256 _weiAmount) public override returns (uint256 quote) {
@@ -620,26 +597,6 @@ contract LimitOrderManager is
         emit LimitOrderCollected(_owner, _tokenId, _tokensToSend0, _tokensToSend1);
     }
 
-    function _selectMonitor() internal view returns (uint32 _selectedIndex) {
-
-        uint256 monitorLength = monitors.length;
-        require(monitorLength > 0, "LOM_ML");
-
-        _selectedIndex = nextMonitor;
-        // check if selected index is full
-        IOrderMonitor monitor = monitors[_selectedIndex];
-        while (monitor.getTokenIdsLength() + 1 > monitor.monitorSize()) {
-            // next
-            _selectedIndex = _selectedIndex + 1;
-            _selectedIndex = _selectedIndex == monitorLength
-            ? 0
-            : _selectedIndex;
-
-            require(_selectedIndex != nextMonitor);
-            monitor = monitors[_selectedIndex];
-        }
-    }
-
     /// @dev Approve transfer to position manager
     function _approveAndTransferToUniswap(address _recipient, 
         address _token, uint256 _amount, address _owner) private {
@@ -660,13 +617,8 @@ contract LimitOrderManager is
         if (_amount > 0) {
             if (_token == address(WETH)) {
                 // if token is WETH, withdraw and send back ETH
-                if (nativeTransfer) {
-                    WETH.withdraw(_amount);
-                    TransferHelper.safeTransferETH(_to, _amount);
-                } else {
-                    require(WETH.transfer(address(WETHExt), _amount), "LOM_WET");
-                    WETHExt.withdraw(_amount, _to, WETH);
-                }
+                WETH.withdraw(_amount);
+                TransferHelper.safeTransferETH(_to, _amount);
             } else {
                 TransferHelper.safeTransfer(_token, _to, _amount);
             }
