@@ -26,8 +26,6 @@ interface IOrderManager {
 
     function canProcess(uint256 _tokenId, uint256 gasPrice) external returns (bool, uint256, uint256);
 
-    function quoteKROM(uint256 weiAmount) external returns (uint256 quote);
-
     function funding(address owner) external view returns (uint256 balance);
 
     function feeAddress() external view returns (address);

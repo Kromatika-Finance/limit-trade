@@ -264,7 +264,6 @@ contract LimitOrderManager is
     ) external override
         returns (bool, uint256) {
 
-        // TODO (optimize this)
         (bool validTrade, uint256 _serviceFee, uint256 _monitorFee) = canProcess(_tokenId, tx.gasprice);
         if (!validTrade) {
             return (false, 0);
@@ -460,12 +459,6 @@ contract LimitOrderManager is
     
     }
 
-    function isUnderfunded(address _owner, uint256 _targetGasPrice) public returns (
-        bool underfunded, uint256 amount, uint256 _serviceFee, uint256 _monitorFee
-    ) {
-        return _isUnderfunded(_owner, _targetGasPrice);
-    }
-
     function _beforeTokenTransfer(
         address from,
         address to,
@@ -525,16 +518,6 @@ contract LimitOrderManager is
         emit ControllerChanged(msg.sender, _controller);
     }
 
-    function quoteKROM(uint256 _weiAmount) public override returns (uint256 quote) {
-
-        return utils.quoteKROM(
-            factory,
-            address(WETH),
-            address(KROM),
-            _weiAmount
-        );
-    }
-
     function serviceFee(address _owner, uint256 _targetGasPrice)
         public returns (uint256 _serviceFee) {
 
@@ -560,7 +543,10 @@ contract LimitOrderManager is
         address) internal virtual
     returns (uint256 _serviceFee, uint256 _monitorFee) {
 
-        _monitorFee = quoteKROM(
+        _monitorFee = utils.quoteKROM(
+            factory,
+            address(WETH),
+            address(KROM),
             gasUsageMonitor.mul(_targetGasPrice).mul(_noOrders)
         );
 
@@ -580,9 +566,18 @@ contract LimitOrderManager is
     ) internal returns
         (uint256 _tokensToSend0, uint256 _tokensToSend1) {
 
+        address _token0 = _pool.token0();
+        address _token1 = _pool.token1();
+        bool hasNativeToken;
+        if ((_token0 == address(WETH) && _tokensOwed0 > 0)
+            || (_token1 == address(WETH) && _tokensOwed1 > 0)
+        ) {
+            hasNativeToken = true;
+        }
+
         (_tokensToSend0, _tokensToSend1) =
             _pool.collect(
-                address(this),
+                hasNativeToken ? address(this) : _owner,
                  _tickLower,
                 _tickUpper,
                 _tokensOwed0,
@@ -591,8 +586,10 @@ contract LimitOrderManager is
 
         require(_tokensToSend0 > 0 || _tokensToSend1 > 0, "LOM_TS");
 
-        _transferTokenTo(_pool.token0(), _tokensToSend0, _owner);
-        _transferTokenTo(_pool.token1(), _tokensToSend1, _owner);
+        if (hasNativeToken) {
+            _transferTokenTo(_token0, _tokensToSend0, _owner);
+            _transferTokenTo(_token1, _tokensToSend1, _owner);
+        }
 
         emit LimitOrderCollected(_owner, _tokenId, _tokensToSend0, _tokensToSend1);
     }

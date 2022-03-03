@@ -37,8 +37,7 @@ contract UniswapUtils is IUniswapUtils, Initializable {
 
     function initialize() public initializer {
         controller = msg.sender;
-        // TODO revert
-        TWAP_PERIOD = 0;
+        TWAP_PERIOD = 1800;
     }
 
     function calculateLimitTicks(
