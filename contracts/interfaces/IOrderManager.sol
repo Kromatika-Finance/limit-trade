@@ -22,9 +22,9 @@ interface IOrderManager {
 
     function processLimitOrder(
         uint256 _tokenId
-    ) external returns (bool, uint256);
+    ) external returns (bool);
 
-    function canProcess(uint256 _tokenId, uint256 gasPrice) external returns (bool, uint256, uint256);
+    function canProcess(uint256 _tokenId) external view returns (bool);
 
     function funding(address owner) external view returns (uint256 balance);
 

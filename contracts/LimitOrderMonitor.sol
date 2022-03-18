@@ -120,7 +120,7 @@ contract LimitOrderMonitor is
     function checkUpkeep(
         bytes calldata
     )
-    external override cannotExecute
+    external view override
     returns (
         bool upkeepNeeded,
         bytes memory performData
@@ -136,10 +136,7 @@ contract LimitOrderMonitor is
 
             // iterate through all active tokens;
             for (uint256 i = monitorOffset; i < tokenSize; i++) {
-                (upkeepNeeded,,) = orderManager.canProcess(
-                    i,
-                    _getGasPrice(tx.gasprice)
-                );
+                upkeepNeeded = orderManager.canProcess(i);
                 if (upkeepNeeded) {
                     batchTokenIds[count] = i;
                     count++;
@@ -185,12 +182,11 @@ contract LimitOrderMonitor is
 
                 if (success) {
                     // parse the options;
-                    (bool validTrade, uint256 _monitorFee) = abi.decode(
-                        data, (bool, uint256)
+                    bool validTrade = abi.decode(
+                        data, (bool)
                     );
                     if (validTrade) {
                         validCount++;
-                        monitorFeePaid += _monitorFee;
                     }
                 }
             }
@@ -201,9 +197,6 @@ contract LimitOrderMonitor is
 
         _gasUsed = _gasUsed - gasleft();
         lastUpkeep = _getBlockNumber();
-
-        // send the paymentPaid to the keeper
-        _transferFees(monitorFeePaid, keeper);
 
         emit BatchProcessed(
             validCount,
