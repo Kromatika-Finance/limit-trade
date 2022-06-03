@@ -9,7 +9,6 @@ import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 
 import "./interfaces/IOrderManager.sol";
 
-
 contract KromatikaRouter {
 
     using SafeMath for uint256;
@@ -23,35 +22,14 @@ contract KromatikaRouter {
     /// @dev trusted forwarder ; gasless relayer
     address public trustedForwarder;
 
-    /// @dev order manager
-    IOrderManager public orderManager;
-
-    /// @dev keeper address; sending funds to
-    address public keeper;
-
-    /// @dev base gas
-    uint256 public baseGas;
-
-    address public KROM;
-
-    /// @dev whitelisted
+    /// @dev whitelisted addresses
     mapping(address => bool) public whitelisted;
 
     constructor(
-        address _trustedForwarder,
-        address _keeper,
-        address _KROM,
-        IOrderManager _orderManager,
-        uint256 _baseGas
+        address _trustedForwarder
     ) {
         trustedForwarder = _trustedForwarder;
         controller = msg.sender;
-
-        orderManager = _orderManager;
-        KROM = _KROM;
-
-        keeper = _keeper;
-        baseGas = _baseGas;
     }
 
     function executeCall(
@@ -59,39 +37,19 @@ contract KromatikaRouter {
         bytes calldata data
     ) external payable returns (bool success, bytes memory result) {
 
-        require(isTrustedForwarder(msg.sender), "KR_TF");
         require(whitelisted[targetAddress], "KR_WL"); // metaswap or limit orderManager
-
-        address _owner = _msgSender();
+        address sender = _msgSender();
 
         uint256 _gasUsed = gasleft();
         // solhint-disable-next-line avoid-call-value
-        if (targetAddress == address(this)) {
-            (success, result) = address(this).call(abi.encodePacked(data, _owner));
-        } else {
-            (success, result) = targetAddress.call(abi.encodePacked(data, _owner));
-        }
+        (success, result) = targetAddress.call(abi.encodePacked(data, sender));
 
         _gasUsed = _gasUsed - gasleft();
-        uint256 weiAmount = _calculateTxnCost(_gasUsed, tx.gasprice);
-
-        // calculate KROM
-        uint256 kromAmount = orderManager.quoteKROM(weiAmount);
-
-        // TODO apply fee multiplier
-
-        // transfer KROM
-        TransferHelper.safeTransferFrom(KROM, _owner, keeper, kromAmount);
-
-        emit RouteForwarded(targetAddress, _owner, weiAmount);
+        emit RouteForwarded(targetAddress, sender, _gasUsed.mul(tx.gasprice));
     }
 
     function isTrustedForwarder(address forwarder) internal view returns(bool) {
         return forwarder == trustedForwarder;
-    }
-
-    function _calculateTxnCost(uint256 _gasUsed, uint256 _gasPrice) internal view returns (uint256) {
-        return _gasUsed.add(baseGas).mul(_gasPrice);
     }
 
     function _msgSender() internal virtual view returns (address payable ret) {
@@ -112,9 +70,9 @@ contract KromatikaRouter {
         trustedForwarder = _forwarder;
     }
 
-    function changeKeeper(address _keeper) external {
+    function changeWhitelisted(address whitelistedAddress, bool toggle) external {
         isAuthorizedController();
-        keeper = _keeper;
+        whitelisted[whitelistedAddress] = toggle;
     }
 
     function changeController(address _controller) external {

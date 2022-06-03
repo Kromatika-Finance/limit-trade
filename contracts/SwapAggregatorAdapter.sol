@@ -50,6 +50,8 @@ contract SwapAggregatorAdapter is IAdapter {
     function _transfer(IERC20 tokenToTransfer, address payable recipient) internal {
 
         uint256 amountOut = LibERC20Adapter.getTokenBalanceOf(tokenToTransfer, address(this));
-        LibERC20Adapter.adapterTransfer(tokenToTransfer, recipient, amountOut);
+        if (amountOut > 0) {
+            LibERC20Adapter.adapterTransfer(tokenToTransfer, recipient, amountOut);
+        }
     }
 }

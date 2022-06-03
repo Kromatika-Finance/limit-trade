@@ -12,7 +12,9 @@ import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "./interfaces/IAdapter.sol";
 
 import "./FlashWallet.sol";
+
 import "./LibERC20Adapter.sol";
+import "./Constants.sol";
 
 contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
 
@@ -28,6 +30,9 @@ contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
     /// @dev controller
     address public controller;
 
+    /// @dev trusted forwarder ; kromatika router
+    address public trustedForwarder;
+
     /// @dev flash wallet
     IFlashWallet public flashWallet;
 
@@ -41,6 +46,7 @@ contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
     function swap(
         IERC20 tokenFrom,
         uint256 amount,
+        address payable recipient,
         AdapterInfo memory adapterInfo
     ) external payable whenNotPaused nonReentrant {
 
@@ -49,9 +55,12 @@ contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
         require(adapter != address(0), "FW_NULL");
 
         address payable sender = _msgSender();
+        if (recipient == Constants.MSG_SENDER) recipient = sender;
 
         if (!LibERC20Adapter.isTokenETH(tokenFrom)) {
             TransferHelper.safeTransferFrom(address(tokenFrom), sender, address(flashWallet), amount);
+        } else {
+            require(msg.value >= amount, 'msg.value');
         }
 
         // Call `adapter` as the wallet.
@@ -63,7 +72,7 @@ contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
                 IAdapter.adapt.selector,
                 IAdapter.AdapterContext({
                     sender: sender,
-                    recipient: sender,
+                    recipient: recipient,
                     data: adapterInfo.data
                 })
             )
@@ -93,6 +102,11 @@ contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
         controller = _controller;
     }
 
+    function changeForwarder(address _forwarder) external {
+        isAuthorizedController();
+        trustedForwarder = _forwarder;
+    }
+
     function pause() external {
         isAuthorizedController();
         _pause();
@@ -105,5 +119,22 @@ contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
 
     function isAuthorizedController() internal view {
         require(msg.sender == controller, "KR_AC");
+    }
+
+    function isTrustedForwarder(address forwarder) internal view returns(bool) {
+        return forwarder == trustedForwarder;
+    }
+
+    function _msgSender() internal virtual override view returns (address payable ret) {
+        if (msg.data.length >= 24 && isTrustedForwarder(msg.sender)) {
+            // At this point we know that the sender is a trusted forwarder,
+            // so we trust that the last bytes of msg.data are the verified sender address.
+            // extract sender address from the end of msg.data
+            assembly {
+                ret := shr(96,calldataload(sub(calldatasize(),20)))
+            }
+        } else {
+            return msg.sender;
+        }
     }
 }
