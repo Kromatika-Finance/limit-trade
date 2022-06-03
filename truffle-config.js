@@ -100,6 +100,24 @@ module.exports = {
             gasPrice: gasPrice,
             gas: gasLimit
         },
+        "matic":{
+            provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
+            network_id: 137,
+            confirmations: 2,
+            timeoutBlocks: 20000,
+            skipDryRun: true,
+            chainId: 137,
+            websockets: true
+        },
+        "matic-test":{
+            provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
+            network_id: 80001,
+            confirmations: 2,
+            timeoutBlocks: 200,
+            skipDryRun: true,
+            chainId: 80001,
+            websockets: true
+        },
         "mainnet":{
             provider: () => new HDWalletProvider(process.env.MNEMONIC,process.env.RPC_URL),
             network_id: 1,
@@ -150,7 +168,7 @@ module.exports = {
                 // See the solidity docs for advice about optimization and evmVersion
                 optimizer: {
                     enabled: true,
-                    runs: 2000,
+                    runs: 100000,
                 },
                 // evmVersion: "byzantium"
             },
@@ -171,6 +189,7 @@ module.exports = {
         'truffle-contract-size'
     ],
     api_keys: {
-        etherscan: process.env.ETHERSCAN_API_KEY
+        etherscan: process.env.ETHERSCAN_API_KEY,
+        polygonscan: process.env.ETHERSCAN_API_KEY
     }
 }
