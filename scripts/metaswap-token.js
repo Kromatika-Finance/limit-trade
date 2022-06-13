@@ -42,7 +42,10 @@ module.exports = async(callback) => {
             [tokenFrom, tokenTo, amountFrom, aggregatorAddress, aggregatorData]
         );
 
-        const estimatedGas = await metaSwap.swap.estimateGas(tokenFrom, amountFrom,
+        const estimatedGas = await metaSwap.swap.estimateGas(
+            tokenFrom,
+            amountFrom,
+            '0x0000000000000000000000000000000000000001'
             [
                 adapterId,
                 adapterData
@@ -51,7 +54,10 @@ module.exports = async(callback) => {
 
         const gasLimit = new web3.utils.BN(estimatedGas * 1.10);
 
-        const performedSwap = await metaSwap.swap(tokenFrom, amountFrom,
+        const performedSwap = await metaSwap.swap(
+            tokenFrom,
+            amountFrom,
+            '0x0000000000000000000000000000000000000001'
             [
                 adapterId,
                 adapterData

@@ -4,7 +4,7 @@ pragma solidity 0.7.6;
 pragma abicoder v2;
 
 import "@openzeppelin/contracts/utils/Address.sol";
-import "./interfaces/IAdapter.sol";
+import "../interfaces/IAdapter.sol";
 
 import "./LibERC20Adapter.sol";
 
@@ -31,7 +31,6 @@ contract SwapAggregatorAdapter is IAdapter {
 
         // 1. check allowance and approve (even for WETH)
         if (!LibERC20Adapter.isTokenETH(data.tokenFrom)) {
-            //tokenFrom.safeTransferFrom(recipient, address(this), amountFrom);
             TransferHelper.safeApprove(address(data.tokenFrom), data.aggregator, data.amountFrom);
         }
 

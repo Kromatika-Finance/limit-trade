@@ -3,7 +3,7 @@
 pragma solidity 0.7.6;
 pragma abicoder v2;
 
-import "./interfaces/IFlashWallet.sol";
+import "../interfaces/IFlashWallet.sol";
 
 contract FlashWallet is IFlashWallet {
 

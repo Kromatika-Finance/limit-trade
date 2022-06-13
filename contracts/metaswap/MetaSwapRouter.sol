@@ -9,14 +9,15 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 
-import "./interfaces/IAdapter.sol";
+import "../interfaces/IAdapter.sol";
+import "../SelfPermit.sol";
+import "../MulticallExtended.sol";
 
 import "./FlashWallet.sol";
-
 import "./LibERC20Adapter.sol";
 import "./Constants.sol";
 
-contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
+contract MetaSwapRouter is ReentrancyGuard, Pausable, MulticallExtended, SelfPermit {
 
     using SafeMath for uint256;
 
@@ -30,8 +31,8 @@ contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
     /// @dev controller
     address public controller;
 
-    /// @dev trusted forwarder ; kromatika router
-    address public trustedForwarder;
+    /// @dev kromatika forwarder
+    address public kromatikaForwarder;
 
     /// @dev flash wallet
     IFlashWallet public flashWallet;
@@ -50,12 +51,13 @@ contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
         AdapterInfo memory adapterInfo
     ) external payable whenNotPaused nonReentrant {
 
-        require(address(flashWallet) != address(0), "MS_NULL");
+        require(address(flashWallet) != address(0), "MS_NULLF");
         address payable adapter = adapters[adapterInfo.adapterId];
-        require(adapter != address(0), "FW_NULL");
+        require(adapter != address(0), "MS_NULLA");
 
         address payable sender = _msgSender();
         if (recipient == Constants.MSG_SENDER) recipient = sender;
+        else if (recipient == Constants.ADDRESS_THIS) recipient = payable(address(this));
 
         if (!LibERC20Adapter.isTokenETH(tokenFrom)) {
             TransferHelper.safeTransferFrom(address(tokenFrom), sender, address(flashWallet), amount);
@@ -85,36 +87,55 @@ contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
         }
     }
 
-    function changeAdapter(string calldata adapterId, address payable adapter) external {
+    function addAdapter(string calldata adapterId, address payable adapter) external {
+
         isAuthorizedController();
         require(adapter != address(0), "MS_NULL");
+        require(adapters[adapterId] == address(0), "MS_EXISTS");
         adapters[adapterId] = adapter;
     }
 
-    function createFlashWallet() public returns (IFlashWallet wallet) {
+    function createFlashWallet() external returns (IFlashWallet wallet) {
+
         isAuthorizedController();
         wallet = new FlashWallet();
         flashWallet = wallet;
     }
 
     function changeController(address _controller) external {
+
         isAuthorizedController();
         controller = _controller;
     }
 
     function changeForwarder(address _forwarder) external {
+
         isAuthorizedController();
-        trustedForwarder = _forwarder;
+        kromatikaForwarder = _forwarder;
     }
 
     function pause() external {
+
         isAuthorizedController();
         _pause();
     }
 
     function unpause() external {
+
         isAuthorizedController();
         _unpause();
+    }
+
+    function rescueFunds(address token, uint256 amount) external {
+
+        isAuthorizedController();
+        TransferHelper.safeTransfer(token, msg.sender, amount);
+    }
+
+    function destroy() external {
+
+        isAuthorizedController();
+        selfdestruct(msg.sender);
     }
 
     function isAuthorizedController() internal view {
@@ -122,7 +143,7 @@ contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
     }
 
     function isTrustedForwarder(address forwarder) internal view returns(bool) {
-        return forwarder == trustedForwarder;
+        return forwarder == kromatikaForwarder;
     }
 
     function _msgSender() internal virtual override view returns (address payable ret) {
@@ -137,4 +158,7 @@ contract KromatikaMetaSwap is ReentrancyGuard, Pausable {
             return msg.sender;
         }
     }
+
+    /// @dev Receives ether from multicall swaps
+    receive() external payable {}
 }
