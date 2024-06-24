@@ -8,4 +8,8 @@ interface IOrderMonitor {
 
     function stopMonitor(uint256 _tokenId) external;
 
+    function getTokenIdsLength() external view returns (uint256);
+
+    function monitorSize() external view returns (uint256);
+
 }

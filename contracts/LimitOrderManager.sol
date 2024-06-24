@@ -130,10 +130,13 @@ contract LimitOrderManager is
     uint256 public gasUsageMonitor;
 
     /// @dev The ID of the next token that will be minted. Skips 0
-    uint256 private nextId;
+    uint176 private nextId;
 
     /// @dev last monitor index + 1 ; always > 0
     uint32 public nextMonitor;
+
+    /// @dev native transfer
+    bool nativeTransfer;
 
     constructor () initializer {}
 
@@ -171,6 +174,7 @@ contract LimitOrderManager is
 
         nextId = 1;
         controller = msg.sender;
+        nativeTransfer = true;
 
         ERC721Upgradeable.__ERC721_init("Kromatika Position", "KROM-POS");
 
@@ -211,7 +215,6 @@ contract LimitOrderManager is
         );
 
         {
-
             (uint256 _amount0, uint256 _amount1) = _pool.mint(
                 address(this),
                 _tickLower,
@@ -221,19 +224,20 @@ contract LimitOrderManager is
             );
             require(_amount0 >= params._amount0Min && _amount1 >= params._amount1Min, 'LOM_PS');
 
-            _mint(msg.sender, (_tokenId = nextId));
-            nextId = nextId.add(1);
+            _mint(msg.sender, (_tokenId = nextId++));
 
             activeOrders[msg.sender] = activeOrders[msg.sender].add(1);
             uint32 _selectedIndex = _selectMonitor();
-            nextMonitor = uint256(_selectedIndex).add(1).toUint32();
+            if (nextMonitor != _selectedIndex) {
+                nextMonitor = _selectedIndex;
+            }
 
             (, uint256 _feeGrowthInside0LastX128, uint256 _feeGrowthInside1LastX128, , ) = _pool.positions(
                 PositionKey.compute(address(this), _tickLower, _tickUpper)
             );
 
             limitOrders[_tokenId] = LimitOrder({
-                pool: _poolAddress,
+                pool: address(_pool),
                 monitor: _selectedIndex,
                 tickLower: _tickLower,
                 tickUpper: _tickUpper,
@@ -529,6 +533,11 @@ contract LimitOrderManager is
         emit GasUsageMonitorChanged(msg.sender, _gasUsageMonitor);
     }
 
+    function setNativeTransfer(bool _nativeTransfer) external {
+        isAuthorizedController();
+        nativeTransfer = _nativeTransfer;
+    }
+
     function changeController(address _controller) external {
         isAuthorizedController();
         controller = _controller;
@@ -616,9 +625,19 @@ contract LimitOrderManager is
         uint256 monitorLength = monitors.length;
         require(monitorLength > 0, "LOM_ML");
 
-        _selectedIndex = nextMonitor == monitorLength
+        _selectedIndex = nextMonitor;
+        // check if selected index is full
+        IOrderMonitor monitor = monitors[_selectedIndex];
+        while (monitor.getTokenIdsLength() + 1 > monitor.monitorSize()) {
+            // next
+            _selectedIndex = _selectedIndex + 1;
+            _selectedIndex = _selectedIndex == monitorLength
             ? 0
-            : nextMonitor;
+            : _selectedIndex;
+
+            require(_selectedIndex != nextMonitor);
+            monitor = monitors[_selectedIndex];
+        }
     }
 
     /// @dev Approve transfer to position manager
@@ -641,14 +660,46 @@ contract LimitOrderManager is
         if (_amount > 0) {
             if (_token == address(WETH)) {
                 // if token is WETH, withdraw and send back ETH
-                require(WETH.transfer(address(WETHExt), _amount), "LOM_WET");
-                WETHExt.withdraw(_amount, _to, WETH);
+                if (nativeTransfer) {
+                    WETH.withdraw(_amount);
+                    TransferHelper.safeTransferETH(_to, _amount);
+                } else {
+                    require(WETH.transfer(address(WETHExt), _amount), "LOM_WET");
+                    WETHExt.withdraw(_amount, _to, WETH);
+                }
             } else {
                 TransferHelper.safeTransfer(_token, _to, _amount);
             }
         }
     }
 
+    function tokensOfOwner(address _owner) external view returns(
+        uint256[] memory ownerTokens
+    ) {
+
+        uint256 tokenCount = balanceOf(_owner);
+
+        if (tokenCount == 0) {
+            // Return an empty array
+            return new uint256[](0);
+        } else {
+            uint256[] memory result = new uint256[](tokenCount);
+            uint256 totalTokens = nextId - 1;
+            uint256 resultIndex = 0;
+
+            uint256 tokenId;
+
+            for (tokenId = 1; tokenId <= totalTokens; tokenId++) {
+                address tokenOwner = _owners[tokenId];
+                if (tokenOwner != address(0) && tokenOwner == _owner) {
+                    result[resultIndex] = tokenId;
+                    resultIndex++;
+                }
+            }
+
+            return result;
+        }
+    }
 
     function _removeLiquidity(
         IUniswapV3Pool _pool,

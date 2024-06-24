@@ -13,7 +13,7 @@ module.exports = async function (deployer, network, accounts) {
   //_maxBatchSize = 20, monitorSize=100, monitorInterval = 1 block
   await deployProxy(LimitOrderMonitor,
       [limitOrderManagerInstance.address, uniswapFactory, kromatikaInstance.address, accounts[0],
-        20, 300],
+        20, 300, 1],
       {deployer, unsafeAllow: ['constructor']});
 
   const limitOrderMonitorInstance = await LimitOrderMonitor.deployed()

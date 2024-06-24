@@ -20,8 +20,16 @@
     "deploy-reset": "truffle migrate --reset --compile-all",
     "deploy-local-dapp": "npm run truffle:deploy:dapp --network=development",
     "deploy-opt-dapp": "npm run truffle:deploy:dapp --network=optimism",
+    "deploy-kovan-keeper": "npm run truffle:deploy:keeper --network=kovan",
+    "upgrade:utils": "npm run truffle:upgrade:utils --network=mainnet",
+    "upgrade:manager": "npm run truffle:upgrade:manager --network=mainnet",
+    "upgrade:monitor": "npm run truffle:upgrade:monitor --network=mainnet",
     "truffle:deploy:token": "truffle migrate --compile-all  -f 2 --to 2 --network $npm_config_network",
     "truffle:deploy:dapp": "truffle migrate --compile-all  -f 3 --network $npm_config_network",
+    "truffle:deploy:keeper": "truffle migrate --reset --compile-all  -f 4 --to 4 --network $npm_config_network",
+    "truffle:upgrade:utils": "truffle migrate --compile-all  -f 5 --to 5 --network $npm_config_network",
+    "truffle:upgrade:manager": "truffle migrate --compile-all  -f 6 --to 6 --network $npm_config_network",
+    "truffle:upgrade:monitor": "truffle migrate --compile-all  -f 7 --to 7 --network $npm_config_network",
     "lint": "solhint contracts/*.sol --formatter stylish",
     "lint:fix": "solhint contracts/*.sol --formatter stylish --fix",
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -40,7 +48,7 @@
   "dependencies": {
     "@chainlink/contracts": "^0.2.2",
     "@openzeppelin/contracts": "^3.4.2",
-    "@openzeppelin/contracts-upgradeable": "^3.4.2",
+    "@openzeppelin/contracts-upgradeable": "file:./lib/openzepellin/contracts-upgradeable",
     "@truffle/hdwallet-provider": "^1.4.2",
     "@uniswap/v3-periphery": "^1.3.0",
     "dotenv": "^10.0.0",
@@ -54,6 +62,6 @@
     "@openzeppelin/truffle-upgrades": "^1.11.0",
     "solc-0.7": "npm:solc@^0.7.0",
     "solidity-docgen": "^0.5.14",
-    "truffle-plugin-verify": "^0.5.15"
+    "truffle-plugin-verify": "^0.5.20"
   }
 }
